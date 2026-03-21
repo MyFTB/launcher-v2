@@ -2,10 +2,50 @@ import { useEffect, useState, useCallback } from 'react'
 import type { LauncherConfig, SystemInfoResult, LauncherProfile } from '@shared/types'
 import LoginModal from '../components/LoginModal'
 
-const MEMORY_PRESETS = [1024, 2048, 3072, 4096, 6144, 8192, 10240, 12288, 16384]
+const MINECRAFT_MIN_MB = 1024 // practical minimum to run Minecraft
+const RAM_CAP_RATIO = 0.75    // leave 25 % for OS + background processes
+const RAM_STEP_MB = 1024      // 1 GB slider steps
+
+/** Returns the recommended max allocatable RAM in MB (75 % of total, rounded to whole GB). */
+function computeMaxMemoryMb(totalRamMb: number | undefined): number {
+  if (!totalRamMb) return 16384
+  return Math.max(
+    MINECRAFT_MIN_MB,
+    Math.floor((totalRamMb * RAM_CAP_RATIO) / 1024) * 1024,
+  )
+}
+
+/**
+ * Landmark values to label on the slider: 1 GB, then powers of 2 (4, 8, 16, …), then maxMb.
+ * These are visual markers only — actual drag steps are RAM_STEP_MB (2 GB).
+ */
+function buildLandmarks(maxMb: number): number[] {
+  const pts: number[] = [MINECRAFT_MIN_MB]
+  for (let gb = 4; gb * 1024 <= maxMb; gb *= 2) {
+    pts.push(gb * 1024)
+  }
+  if (pts[pts.length - 1] !== maxMb) pts.push(maxMb)
+  return pts
+}
 
 function memLabel(mb: number): string {
   return mb >= 1024 ? `${mb / 1024} GB` : `${mb} MB`
+}
+
+function ThumbLabel({ value, min, max }: { value: number; min: number; max: number }): JSX.Element {
+  const pct = max === min ? 0 : ((value - min) / (max - min)) * 100
+  // Correct for thumb radius (~8px) so label tracks the actual thumb center
+  const offset = 8 - pct * 0.16
+  return (
+    <div className="relative h-5">
+      <span
+        style={{ left: `calc(${pct}% + ${offset}px)` }}
+        className="absolute -translate-x-1/2 text-xs font-semibold text-accent"
+      >
+        {value} MB
+      </span>
+    </div>
+  )
 }
 
 interface FormState {
@@ -122,13 +162,11 @@ export default function Settings(): JSX.Element {
     setForm((prev) => ({ ...prev, [key]: value }))
   }
 
-  const maxMemorySliderValue = MEMORY_PRESETS.indexOf(form.maxMemory) !== -1
-    ? MEMORY_PRESETS.indexOf(form.maxMemory)
-    : MEMORY_PRESETS.findIndex((v) => v >= form.maxMemory)
+  const maxMemoryMb = computeMaxMemoryMb(systemInfo?.totalMemoryMb)
 
-  const minMemorySliderValue = MEMORY_PRESETS.indexOf(form.minMemory) !== -1
-    ? MEMORY_PRESETS.indexOf(form.minMemory)
-    : MEMORY_PRESETS.findIndex((v) => v >= form.minMemory)
+  function clampMemory(mb: number, lo: number, hi: number): number {
+    return Math.max(lo, Math.min(hi, Math.round(mb / 1024) * 1024))
+  }
 
   const platformLabel = systemInfo
     ? { win32: 'Windows', darwin: 'macOS', linux: 'Linux' }[systemInfo.platform] ?? systemInfo.platform
@@ -154,7 +192,8 @@ export default function Settings(): JSX.Element {
   }
 
   return (
-    <div className="p-6 max-w-2xl mx-auto animate-fade-in">
+    <div className="animate-fade-in flex flex-col min-h-full">
+      <div className="p-6 max-w-2xl mx-auto w-full flex-1">
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-text-primary">Einstellungen</h1>
         <p className="text-text-secondary mt-1 text-sm">Konfiguriere den Launcher nach deinen Wünschen.</p>
@@ -307,31 +346,54 @@ export default function Settings(): JSX.Element {
 
         {/* Max Memory */}
         <div>
+          <div className="flex items-center justify-between border-b border-border pb-2 mb-3">
+            <span className="text-xs font-semibold text-text-primary uppercase tracking-wide">
+              Arbeitsspeicher
+            </span>
+            {systemInfo && (
+              <span className="text-xs text-text-muted">
+                System: <span className="text-text-secondary font-medium">{Math.round(systemInfo.totalMemoryMb / 1024)} GB</span>
+                {' '}— max. <span className="text-accent font-medium">{memLabel(maxMemoryMb)}</span> empfohlen
+              </span>
+            )}
+          </div>
+
+          {/* Max Memory */}
           <div className="flex items-center justify-between mb-1.5">
             <label className="text-xs font-medium text-text-secondary">
               Maximaler Arbeitsspeicher
             </label>
-            <span className="text-sm font-semibold text-accent">{memLabel(form.maxMemory)}</span>
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                min={MINECRAFT_MIN_MB}
+                max={maxMemoryMb}
+                step={RAM_STEP_MB}
+                className="w-20 text-right bg-transparent text-sm font-semibold text-accent border-b border-accent/40 focus:border-accent focus:outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                value={form.maxMemory}
+                onChange={(e) => {
+                  const mb = clampMemory(parseInt(e.target.value) || MINECRAFT_MIN_MB, MINECRAFT_MIN_MB, maxMemoryMb)
+                  update('maxMemory', mb)
+                }}
+              />
+              <span className="text-sm text-text-secondary">MB</span>
+            </div>
           </div>
+          <ThumbLabel value={form.maxMemory} min={MINECRAFT_MIN_MB} max={maxMemoryMb} />
           <input
             type="range"
-            min={0}
-            max={MEMORY_PRESETS.length - 1}
-            step={1}
-            value={maxMemorySliderValue >= 0 ? maxMemorySliderValue : 3}
+            min={MINECRAFT_MIN_MB}
+            max={maxMemoryMb}
+            step={RAM_STEP_MB}
+            value={form.maxMemory}
             className="w-full accent-accent cursor-pointer"
-            onChange={(e) => update('maxMemory', MEMORY_PRESETS[parseInt(e.target.value)])}
+            onChange={(e) => update('maxMemory', parseInt(e.target.value))}
           />
           <div className="flex justify-between text-xs text-text-muted mt-1">
-            {MEMORY_PRESETS.filter((_, i) => i % 2 === 0).map((v) => (
+            {buildLandmarks(maxMemoryMb).map((v) => (
               <span key={v}>{memLabel(v)}</span>
             ))}
           </div>
-          {systemInfo && (
-            <p className="text-xs text-text-muted mt-1">
-              System: {Math.round(systemInfo.totalMemoryMb / 1024)} GB verfügbar
-            </p>
-          )}
         </div>
 
         {/* Min Memory */}
@@ -340,19 +402,37 @@ export default function Settings(): JSX.Element {
             <label className="text-xs font-medium text-text-secondary">
               Minimaler Arbeitsspeicher
             </label>
-            <span className="text-sm font-semibold text-accent">{memLabel(form.minMemory)}</span>
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                min={MINECRAFT_MIN_MB}
+                max={maxMemoryMb}
+                step={RAM_STEP_MB}
+                className="w-20 text-right bg-transparent text-sm font-semibold text-accent border-b border-accent/40 focus:border-accent focus:outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                value={form.minMemory}
+                onChange={(e) => {
+                  const mb = clampMemory(parseInt(e.target.value) || MINECRAFT_MIN_MB, MINECRAFT_MIN_MB, maxMemoryMb)
+                  update('minMemory', mb)
+                }}
+              />
+              <span className="text-sm text-text-secondary">MB</span>
+            </div>
           </div>
+          <p className={`text-xs text-yellow-400 mb-1.5 transition-opacity duration-200 ${form.minMemory > form.maxMemory ? 'opacity-100' : 'opacity-0'}`}>
+            ⚠ Minimaler Arbeitsspeicher ist größer als der maximale.
+          </p>
+          <ThumbLabel value={form.minMemory} min={MINECRAFT_MIN_MB} max={maxMemoryMb} />
           <input
             type="range"
-            min={0}
-            max={MEMORY_PRESETS.length - 1}
-            step={1}
-            value={minMemorySliderValue >= 0 ? minMemorySliderValue : 1}
+            min={MINECRAFT_MIN_MB}
+            max={maxMemoryMb}
+            step={RAM_STEP_MB}
+            value={form.minMemory}
             className="w-full accent-accent cursor-pointer"
-            onChange={(e) => update('minMemory', MEMORY_PRESETS[parseInt(e.target.value)])}
+            onChange={(e) => update('minMemory', parseInt(e.target.value))}
           />
           <div className="flex justify-between text-xs text-text-muted mt-1">
-            {MEMORY_PRESETS.filter((_, i) => i % 2 === 0).map((v) => (
+            {buildLandmarks(maxMemoryMb).map((v) => (
               <span key={v}>{memLabel(v)}</span>
             ))}
           </div>
@@ -395,52 +475,63 @@ export default function Settings(): JSX.Element {
       </div>
 
       {/* System info */}
-      <div className="card px-5 py-4 mb-6 grid grid-cols-2 sm:grid-cols-4 gap-4">
-        <div>
+      <div className="card px-5 py-4 mb-6 flex justify-between">
+        <div className="text-left">
           <span className="text-xs text-text-muted uppercase tracking-wide">Launcher</span>
           <p className="text-sm font-medium text-text-primary mt-0.5">{systemInfo?.launcherVersion ?? '—'}</p>
         </div>
-        <div>
+        <div className="text-center">
           <span className="text-xs text-text-muted uppercase tracking-wide">Plattform</span>
           <p className="text-sm font-medium text-text-primary mt-0.5">{platformLabel}</p>
         </div>
-        <div>
+        <div className="text-right">
           <span className="text-xs text-text-muted uppercase tracking-wide">Architektur</span>
           <p className="text-sm font-medium text-text-primary mt-0.5">{systemInfo?.arch ?? '—'}</p>
         </div>
-        <div>
-          <span className="text-xs text-text-muted uppercase tracking-wide">RAM gesamt</span>
-          <p className="text-sm font-medium text-text-primary mt-0.5">
-            {systemInfo ? `${Math.round(systemInfo.totalMemoryMb / 1024)} GB` : '—'}
-          </p>
-        </div>
       </div>
 
-      {/* Save button */}
-      <div className="flex items-center justify-between">
+      {/* Log button */}
+      <div className="flex items-center justify-end pb-4">
         <button
           className="btn-ghost text-xs"
           onClick={() => window.electronAPI.configOpenLogs()}
         >
           Log-Ordner öffnen
         </button>
-        <div className="flex items-center gap-3">
-          {saveSuccess && (
-            <span className="text-xs text-accent animate-fade-in">Gespeichert</span>
-          )}
-          <button
-            className="btn-primary"
-            disabled={!isDirty || saving}
-            onClick={handleSave}
-          >
-            {saving ? 'Speichern...' : 'Speichern'}
-          </button>
-        </div>
       </div>
 
       {showLogin && <LoginModal onClose={() => setShowLogin(false)} />}
     </div>
-  )
+
+    {/* Discord-style floating save pill */}
+    <div className="sticky bottom-0 flex justify-center pb-5 pointer-events-none">
+      <div
+        className={`pointer-events-auto flex items-center gap-4 px-5 py-2.5 rounded-2xl bg-bg-elevated border border-border shadow-2xl transition-all duration-200 ${
+          isDirty ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-3'
+        }`}
+      >
+        <span className="text-sm text-text-secondary whitespace-nowrap">
+          Nicht gespeicherte Änderungen
+        </span>
+        <div className="flex items-center gap-2">
+          {saveSuccess && (
+            <span className="text-xs text-accent animate-fade-in">✓ Gespeichert</span>
+          )}
+          <button
+            className="btn-ghost text-sm"
+            disabled={saving}
+            onClick={() => original && setForm(original)}
+          >
+            Zurücksetzen
+          </button>
+          <button className="btn-primary" disabled={saving} onClick={handleSave}>
+            {saving ? 'Speichern…' : 'Speichern'}
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+)
 }
 
 function PlayerAvatar({ uuid, username }: { uuid: string; username: string }): JSX.Element {
