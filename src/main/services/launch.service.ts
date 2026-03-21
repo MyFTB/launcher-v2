@@ -19,6 +19,7 @@ import { configService } from './config.service'
 import { getSelectedProfile } from './auth.service'
 import { installService } from './install.service'
 import { getMainWindow } from '../app-state'
+import { resolveJavaPath } from './java.service'
 import type {
   LaunchStartPayload,
   LaunchOpenFolderPayload,
@@ -302,27 +303,8 @@ class LaunchService {
           extraJVMArgs.push(...platformFlags)
         }
 
-        // Custom runtime binary path
-        let javaPath: string
-        if (manifest.runtime) {
-          const runtimeBin = process.platform === 'win32' ? 'javaw.exe' : 'java'
-          javaPath = path.join(instanceDir, 'runtime', 'bin', runtimeBin)
-
-          // Ensure executable bit on POSIX
-          if (process.platform !== 'win32') {
-            try {
-              await fs.chmod(javaPath, 0o755)
-            } catch {
-              // chmod failure is non-fatal; java may still execute
-            }
-          }
-        } else if (process.env.JAVA_HOME) {
-          const bin = process.platform === 'win32' ? 'java.exe' : 'java'
-          javaPath = path.join(process.env.JAVA_HOME, 'bin', bin)
-        } else {
-          // Fall back to whatever 'java' is on the system PATH
-          javaPath = process.platform === 'win32' ? 'java.exe' : 'java'
-        }
+        // Java binary path — resolved via java.service (bundled runtime, system scan, fallback)
+        const javaPath = await resolveJavaPath(manifest)
 
         const launchOptions = {
           gamePath: instanceDir,

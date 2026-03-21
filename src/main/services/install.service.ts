@@ -1,6 +1,5 @@
 import path from 'node:path'
 import fs from 'node:fs/promises'
-import os from 'node:os'
 import { pipeline } from 'node:stream/promises'
 import { Readable } from 'node:stream'
 import { setMaxListeners } from 'node:events'
@@ -21,6 +20,7 @@ import { IpcChannels } from '../ipc/channels'
 import { Constants, fmt } from '../constants'
 import { configService } from './config.service'
 import { getMainWindow } from '../app-state'
+import { ensureRuntime } from './java.service'
 import type {
   ModpackManifestReference,
   ModpackManifest,
@@ -33,15 +33,6 @@ import type {
 } from '../../shared/types'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
-
-/** Minimal shape of the custom JRE index JSON at launcher.myftb.de/{runtime}.json */
-interface RuntimeIndex {
-  objects: Array<{
-    path: string
-    url: string
-    hash: string
-  }>
-}
 
 type ModLoader = 'forge' | 'neoforge' | 'fabric' | 'quilt' | 'vanilla'
 
@@ -69,34 +60,56 @@ function evaluateCondition(
 }
 
 /**
- * Detect the mod loader used by a modpack from its versionManifest libraries.
- * Returns the loader type and the raw library name string that matched.
+ * Detect the mod loader used by a modpack.
+ *
+ * Priority:
+ *  1. versionManifest.libraries — checks net.neoforged / net.minecraftforge:forge specifically
+ *  2. versionManifest.id — for packs whose versionManifest omits the libraries array entirely;
+ *     the ID pattern "{mc}-forge-{ver}" or "{mc}-neoforge-{ver}" is always present.
+ *  3. fabric-loader- / quilt-loader- ID prefix.
+ *
+ * Returns the loader type and the library name to pass to buildForgeEntry / installNeoForged.
+ * For library-absent packs a synthetic coordinate is synthesised from the version ID.
  */
 function detectModLoader(manifest: ModpackManifest): {
   loader: ModLoader
   libraryName: string | null
 } {
   const libraries = manifest.versionManifest.libraries ?? []
+  const versionId = manifest.versionManifest.id ?? ''
 
+  // ── 1. Library scan (most reliable when libraries are present) ────────────
   for (const lib of libraries) {
-    if (lib.name.includes('net.neoforged')) {
+    if (lib.name.includes('net.neoforged:neoforge:') || lib.name.includes('net.neoforged:forge:')) {
       return { loader: 'neoforge', libraryName: lib.name }
     }
   }
 
   for (const lib of libraries) {
-    if (lib.name.includes('net.minecraftforge')) {
+    if (lib.name.includes('net.minecraftforge:forge:')) {
       return { loader: 'forge', libraryName: lib.name }
     }
   }
 
-  // Fabric: versionManifest.id starts with 'fabric-loader-'
-  const versionId = manifest.versionManifest.id ?? ''
+  // ── 2. Version ID fallback (handles packs with no libraries array) ────────
+  // Patterns: "{mcVersion}-forge-{forgeVersion}"  e.g. 1.20.1-forge-47.4.0
+  //           "{mcVersion}-neoforge-{forgeVersion}" e.g. 1.20.1-neoforge-47.1.0
+  const idMatch = versionId.match(/^(\d+\.\d+(?:\.\d+)?)-(?:(neoforge)|(forge))-(.+)$/)
+  if (idMatch) {
+    const [, mcVersion, neoToken, , forgeVersion] = idMatch
+    if (neoToken) {
+      // net.neoforged:neoforge:{forgeVersion}
+      return { loader: 'neoforge', libraryName: `net.neoforged:neoforge:${forgeVersion}` }
+    }
+    // net.minecraftforge:forge:{mcVersion}-{forgeVersion} — modern format
+    return { loader: 'forge', libraryName: `net.minecraftforge:forge:${mcVersion}-${forgeVersion}` }
+  }
+
+  // ── 3. Fabric / Quilt by ID prefix ────────────────────────────────────────
   if (versionId.startsWith('fabric-loader-')) {
     return { loader: 'fabric', libraryName: versionId }
   }
 
-  // Quilt: similar prefix
   if (versionId.startsWith('quilt-loader-')) {
     return { loader: 'quilt', libraryName: versionId }
   }
@@ -149,29 +162,6 @@ function buildForgeEntry(
   }
 
   return { mcversion, version: mavenVersion }
-}
-
-/**
- * Determine current platform string used by the runtime index.
- * Mirrors the Java Platform enum convention (windows / linux / osx).
- */
-function getRuntimePlatform(): string {
-  switch (process.platform) {
-    case 'win32':
-      return 'windows'
-    case 'darwin':
-      return 'osx'
-    default:
-      return 'linux'
-  }
-}
-
-/**
- * Return the architecture suffix used in runtime index names.
- * 64-bit → '-x64', 32-bit → '' (mirrors the Java heuristic).
- */
-function getRuntimeArchSuffix(): string {
-  return os.arch().includes('64') ? '-x64' : ''
 }
 
 /**
@@ -344,7 +334,7 @@ class InstallService {
         currentFile: `Installing NeoForge ${neoforgeVersion}…`,
       } satisfies InstallProgressEvent)
 
-      await installNeoForged('neoforge', neoforgeVersion, minecraftDir)
+      await installNeoForged('neoforge', neoforgeVersion, minecraftDir, {})
 
       signal.throwIfAborted()
     } else if (loader === 'fabric' || loader === 'quilt') {
@@ -516,83 +506,12 @@ class InstallService {
     signal.throwIfAborted()
 
     // ── g. Custom JRE ─────────────────────────────────────────────────────────
-    if (manifest.runtime) {
-      const platform = getRuntimePlatform()
-      const arch = getRuntimeArchSuffix()
-      const runtimeIndexName = `${manifest.runtime}-${platform}${arch}`
-      const runtimeIndexUrl = fmt(Constants.runtimeIndex, runtimeIndexName)
-
-      pushEvent(IpcChannels.INSTALL_PROGRESS, {
-        total,
-        finished,
-        failed,
-        currentFile: `Downloading JRE index…`,
-      } satisfies InstallProgressEvent)
-
-      const indexRes = await fetch(runtimeIndexUrl, { signal })
-      if (!indexRes.ok) {
-        throw new Error(
-          `Failed to fetch runtime index: ${indexRes.status} ${indexRes.statusText}`,
-        )
-      }
-      const runtimeIndex: RuntimeIndex = await indexRes.json() as RuntimeIndex
-
-      const runtimeDir = path.join(instanceDir, 'runtime')
-      await fs.mkdir(runtimeDir, { recursive: true })
-
-      const runtimeObjects = runtimeIndex.objects
-      total += runtimeObjects.length
-
-      pushEvent(IpcChannels.INSTALL_PROGRESS, {
-        total,
-        finished,
-        failed,
-        currentFile: `Installing JRE…`,
-      } satisfies InstallProgressEvent)
-
-      for (const obj of runtimeObjects) {
-        signal.throwIfAborted()
-
-        const dest = path.join(runtimeDir, obj.path)
-        await fs.mkdir(path.dirname(dest), { recursive: true })
-
-        try {
-          const res = await fetch(obj.url, { signal })
-          if (!res.ok) {
-            throw new Error(`HTTP ${res.status} ${res.statusText} for ${obj.url}`)
-          }
-          const fileHandle = await fs.open(dest, 'w')
-          try {
-            await pipeline(
-              Readable.fromWeb(res.body as import('node:stream/web').ReadableStream),
-              fileHandle.createWriteStream(),
-            )
-          } finally {
-            await fileHandle.close()
-          }
-          finished++
-        } catch (err: unknown) {
-          if ((err as Error).name === 'AbortError') throw err
-          console.warn(`[InstallService] Failed to download JRE file ${obj.path}:`, err)
-          failed++
-        }
-
-        pushEvent(IpcChannels.INSTALL_PROGRESS, {
-          total,
-          finished,
-          failed,
-          currentFile: obj.path,
-        } satisfies InstallProgressEvent)
-      }
-
-      // Make the java binary executable on Unix platforms
-      if (process.platform !== 'win32') {
-        const javaBin = path.join(runtimeDir, 'bin', 'java')
-        await fs.chmod(javaBin, 0o755).catch(() => {
-          // Best-effort — may not exist under this exact path
-        })
-      }
-    }
+    ;({ total, finished, failed } = await ensureRuntime(
+      manifest,
+      signal,
+      { total, finished, failed },
+      (p) => pushEvent(IpcChannels.INSTALL_PROGRESS, p satisfies InstallProgressEvent),
+    ))
 
     // ── Complete ──────────────────────────────────────────────────────────────
     const success = failed === 0

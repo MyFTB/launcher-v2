@@ -1,6 +1,12 @@
+import { setMaxListeners } from 'node:events'
 import { app, BrowserWindow, shell } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+
+// Undici (Node's built-in fetch) registers multiple abort listeners per concurrent
+// request. Raise the default so the false-positive "memory leak" warning is
+// suppressed without hiding real issues.
+setMaxListeners(30)
 import { registerIpcHandlers } from './ipc/router'
 import { configService } from './services/config.service'
 import { setMainWindow, setLaunchPackArg, getMainWindow } from './app-state'
