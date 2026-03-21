@@ -1,0 +1,12 @@
+node_modules/
+out/
+dist/
+.DS_Store
+*.local
+*.log
+
+# electron-builder output
+release/
+
+# Type-check cache
+*.tsbuildinfo

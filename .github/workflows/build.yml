@@ -1,0 +1,77 @@
+# CI build workflow — runs on every push and pull request.
+# Purpose: verify the app compiles, passes type-checking, and can be packaged
+# on all three platforms. No artifacts are published.
+
+name: Build
+
+on:
+  push:
+    branches:
+      - "**"
+    # Ignore tag pushes here — those are handled by release.yml
+    tags-ignore:
+      - "v*"
+  pull_request:
+    branches:
+      - "**"
+
+# Cancel in-progress runs for the same ref so stale builds don't queue up.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      # ── 1. Source code ──────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Node.js ──────────────────────────────────────────────────────────
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          # Cache npm's dependency cache keyed on the lockfile so installs are
+          # fast on subsequent runs when package-lock.json hasn't changed.
+          cache: "npm"
+
+      # ── 3. Install dependencies ─────────────────────────────────────────────
+      - name: Install dependencies
+        run: npm ci
+
+      # ── 4. Type checking ────────────────────────────────────────────────────
+      # Runs tsc --noEmit against both the main-process tsconfig and the
+      # renderer tsconfig (as defined in the "type-check" npm script).
+      - name: Type check
+        run: npm run type-check
+
+      # ── 5. Build main + renderer ────────────────────────────────────────────
+      # electron-vite compiles the main process, preload scripts, and the
+      # Vite/React renderer into out/.
+      - name: Build (electron-vite)
+        run: npx electron-vite build
+
+      # ── 6. Packaging smoke test ─────────────────────────────────────────────
+      # --dir unpacks the app into a directory instead of producing a final
+      # installer, which is significantly faster and avoids requiring code-
+      # signing certificates.  --config.publish=never ensures electron-builder
+      # never attempts to upload anything to GitHub Releases.
+      - name: Package (smoke test, no publish)
+        run: npx electron-builder --dir --config.publish=never
+        env:
+          # electron-builder still needs a token env var present on some
+          # platforms even when publish is disabled — provide a placeholder so
+          # the build doesn't fail with a "missing token" error.
+          GH_TOKEN: ${{ github.token }}

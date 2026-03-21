@@ -1,0 +1,224 @@
+# Release workflow — triggered when a v* tag is pushed (e.g. v2.0.0).
+# Each platform builds its signed installer in parallel, then a final job
+# creates the GitHub Release and attaches all artifacts.
+#
+# Required repository secrets:
+#
+#   GH_TOKEN                    — GitHub token used by electron-builder to
+#                                 upload artifacts to GitHub Releases.
+#                                 Use the built-in github.token or a PAT with
+#                                 contents:write + releases:write scopes.
+#
+#   Windows code signing (optional — build succeeds without these):
+#   WIN_CSC_LINK                — Base64-encoded .pfx certificate, or a URL to
+#                                 the certificate file.
+#   WIN_CSC_KEY_PASSWORD        — Password for the Windows signing certificate.
+#
+#   macOS code signing (required for notarization):
+#   CSC_LINK                    — Base64-encoded .p12 Developer ID certificate.
+#   CSC_KEY_PASSWORD            — Password for the macOS .p12 certificate.
+#   APPLE_ID                    — Apple ID email used for notarization.
+#   APPLE_APP_SPECIFIC_PASSWORD — App-specific password generated at
+#                                 appleid.apple.com for the APPLE_ID account.
+#   APPLE_TEAM_ID               — 10-character Apple Developer Team ID.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+# Only one release workflow should run at a time for a given tag.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+# ── Shared inputs / outputs ──────────────────────────────────────────────────
+# The tag name (e.g. "v2.0.0") is derived from github.ref_name and used as
+# the release title / artifact directory.
+
+jobs:
+  # ============================================================================
+  # Platform build jobs — run in parallel
+  # ============================================================================
+
+  build-windows:
+    name: Build — Windows
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (electron-vite)
+        run: npx electron-vite build
+
+      # electron-builder --win produces the NSIS x64 installer defined in
+      # package.json under build.win.  --publish always uploads artifacts
+      # directly to the draft GitHub Release created by the release job.
+      - name: Package & publish — Windows
+        run: npx electron-builder --win --publish always
+        env:
+          # GitHub Releases upload token
+          GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
+
+          # Windows code signing — both must be set, or neither (unsigned build).
+          # WIN_CSC_LINK accepts a base64-encoded .pfx or a file:// / https:// URL.
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+
+  # ----------------------------------------------------------------------------
+
+  build-macos:
+    name: Build — macOS
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (electron-vite)
+        run: npx electron-vite build
+
+      # electron-builder --mac produces DMG images for x64 and arm64 (Apple
+      # Silicon) as defined in package.json under build.mac.
+      # The CSC_* secrets inject the Developer ID certificate; the APPLE_*
+      # secrets enable notarization via Apple's notary service.
+      - name: Package & publish — macOS
+        run: npx electron-builder --mac --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
+
+          # macOS Developer ID signing certificate (.p12, base64-encoded)
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+
+          # Apple notarization credentials
+          # APPLE_ID:                  your Apple ID email (e.g. dev@example.com)
+          # APPLE_APP_SPECIFIC_PASSWORD: app-specific password from appleid.apple.com
+          # APPLE_TEAM_ID:             10-character team ID from developer.apple.com
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+  # ----------------------------------------------------------------------------
+
+  build-linux:
+    name: Build — Linux
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (electron-vite)
+        run: npx electron-vite build
+
+      # electron-builder --linux produces AppImage and .deb packages as defined
+      # in package.json under build.linux.
+      - name: Package & publish — Linux
+        run: npx electron-builder --linux --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
+
+  # ============================================================================
+  # Final release job — runs after all three platform builds succeed
+  # ============================================================================
+
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+
+    # Wait for all platform builds to finish before finalising the release.
+    needs:
+      - build-windows
+      - build-macos
+      - build-linux
+
+    # Write permission is needed to create/edit GitHub Releases.
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # Fetch all history so the changelog step can compare commits.
+          fetch-depth: 0
+
+      # Generate a simple changelog from commits since the previous tag.
+      # The output is used as the release body below.
+      - name: Generate changelog
+        id: changelog
+        run: |
+          PREVIOUS_TAG=$(git tag --sort=-version:refname | grep -E '^v[0-9]' | sed -n '2p')
+          CURRENT_TAG="${{ github.ref_name }}"
+
+          if [ -n "$PREVIOUS_TAG" ]; then
+            COMMITS=$(git log "${PREVIOUS_TAG}..${CURRENT_TAG}" \
+              --pretty=format:"- %s (%h)" --no-merges)
+          else
+            COMMITS=$(git log "${CURRENT_TAG}" \
+              --pretty=format:"- %s (%h)" --no-merges | head -30)
+          fi
+
+          # Write multi-line output safely using the GitHub Actions delimiter syntax.
+          {
+            echo "body<<EOF"
+            echo "## What's changed"
+            echo ""
+            if [ -n "$PREVIOUS_TAG" ]; then
+              echo "Changes since \`${PREVIOUS_TAG}\`:"
+            else
+              echo "Initial release:"
+            fi
+            echo ""
+            echo "$COMMITS"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      # Create (or update) the GitHub Release for this tag.
+      # electron-builder's --publish always already uploaded the platform
+      # artifacts to a draft release; this step marks it as non-draft and
+      # sets the title + description.
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "MyFTB Launcher ${{ github.ref_name }}"
+          body: ${{ steps.changelog.outputs.body }}
+          # Set draft: false to make the release publicly visible.
+          draft: false
+          # Mark as pre-release if the tag contains a pre-release identifier
+          # (e.g. v2.0.0-beta.1).
+          prerelease: ${{ contains(github.ref_name, '-') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN || github.token }}

@@ -1,0 +1,150 @@
+import { useEffect, useState } from 'react'
+import type { ModpackManifest, ModpackManifestReference } from '@shared/types'
+
+interface ModpackCardProps {
+  manifest: ModpackManifest | ModpackManifestReference
+  isInstalled: boolean
+  isRunning: boolean
+  onInstall?: () => void
+  onPlay?: () => void
+  onContextMenu?: (e: React.MouseEvent) => void
+}
+
+function isFullManifest(m: ModpackManifest | ModpackManifestReference): m is ModpackManifest {
+  return 'versionManifest' in m
+}
+
+function detectModLoader(manifest: ModpackManifest | ModpackManifestReference): string | null {
+  if (!isFullManifest(manifest)) return null
+  const libs = manifest.versionManifest?.libraries ?? []
+  for (const lib of libs) {
+    const name = lib.name ?? ''
+    if (name.startsWith('net.neoforged')) return 'NeoForge'
+    if (name.startsWith('net.minecraftforge')) return 'Forge'
+  }
+  return null
+}
+
+export default function ModpackCard({
+  manifest,
+  isInstalled,
+  isRunning,
+  onInstall,
+  onPlay,
+  onContextMenu,
+}: ModpackCardProps): JSX.Element {
+  const [logoUrl, setLogoUrl] = useState<string | null>(null)
+  const [hovered, setHovered] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    window.electronAPI
+      .packsGetLogo(manifest.location, manifest.name, manifest.logo)
+      .then((url) => {
+        if (!cancelled && url) setLogoUrl(url)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [manifest.location, manifest.name])
+
+  const modLoader = detectModLoader(manifest)
+
+  return (
+    <div
+      className="card relative flex flex-col overflow-hidden group cursor-pointer transition-all duration-200 hover:border-border-focus hover:shadow-lg"
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onContextMenu={onContextMenu}
+    >
+      {/* Logo area */}
+      <div className="relative w-full aspect-square bg-bg-elevated overflow-hidden">
+        {logoUrl ? (
+          <img
+            src={logoUrl}
+            alt={manifest.title}
+            className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+          />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center">
+            <div className="w-12 h-12 rounded-lg bg-bg-overlay flex items-center justify-center">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="w-6 h-6 text-text-muted">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+              </svg>
+            </div>
+          </div>
+        )}
+
+        {/* Running pulse indicator */}
+        {isRunning && (
+          <div className="absolute top-2 right-2 flex items-center gap-1.5 bg-black/60 backdrop-blur-sm rounded-full px-2 py-1">
+            <span className="w-2 h-2 rounded-full bg-accent animate-pulse" />
+            <span className="text-xs font-medium text-accent">Läuft...</span>
+          </div>
+        )}
+
+        {/* Hover action overlay */}
+        <div
+          className={`absolute inset-0 flex items-center justify-center bg-black/50 backdrop-blur-[2px] transition-opacity duration-200 ${
+            hovered ? 'opacity-100' : 'opacity-0'
+          }`}
+        >
+          {isInstalled ? (
+            <button
+              className="btn-primary px-6 py-2.5 text-base font-semibold shadow-lg"
+              onClick={(e) => {
+                e.stopPropagation()
+                onPlay?.()
+              }}
+              disabled={isRunning}
+            >
+              {isRunning ? 'Läuft...' : 'Spielen'}
+            </button>
+          ) : (
+            <button
+              className="btn-primary px-6 py-2.5 text-base font-semibold shadow-lg"
+              onClick={(e) => {
+                e.stopPropagation()
+                onInstall?.()
+              }}
+            >
+              Installieren
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Info area */}
+      <div className="p-3 flex flex-col gap-1">
+        <div className="flex items-start justify-between gap-2">
+          <h3 className="text-sm font-semibold text-text-primary leading-snug line-clamp-2">
+            {manifest.title}
+          </h3>
+        </div>
+
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {/* Game version badge */}
+          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs bg-bg-overlay text-text-muted border border-border">
+            {manifest.gameVersion}
+          </span>
+
+          {/* Mod loader badge */}
+          {modLoader && (
+            <span
+              className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs border ${
+                modLoader === 'NeoForge'
+                  ? 'bg-orange-900/30 text-orange-400 border-orange-700/40'
+                  : 'bg-yellow-900/30 text-yellow-400 border-yellow-700/40'
+              }`}
+            >
+              {modLoader}
+            </span>
+          )}
+        </div>
+
+        <span className="text-xs text-text-muted">v{manifest.version}</span>
+      </div>
+    </div>
+  )
+}

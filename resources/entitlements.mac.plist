@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  macOS entitlements for MyFTB Launcher — required for Hardened Runtime.
+
+  electron-builder references this file via:
+    build.mac.entitlements            (applied to the outer .app bundle)
+    build.mac.entitlementsInherit     (applied to every helper process inside
+                                       the .app, e.g. Electron Helper (GPU))
+
+  All entitlements below are the minimum required to run a sandboxed Electron
+  app with Hardened Runtime enabled and to pass Apple notarization.
+
+  Hardened Runtime reference:
+    https://developer.apple.com/documentation/security/hardened_runtime
+-->
+<plist version="1.0">
+  <dict>
+
+    <!--
+      Allow JIT compilation.
+      Electron's V8 JavaScript engine generates machine code at runtime;
+      without this entitlement the renderer process will crash under
+      Hardened Runtime.
+    -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+
+    <!--
+      Allow unsigned executable memory.
+      Required by Electron because it maps executable pages that are not
+      backed by a signed binary (used internally by V8 / Node.js).
+    -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+
+    <!--
+      Allow DYLD environment variables.
+      Electron injects its own framework via DYLD_INSERT_LIBRARIES; this
+      entitlement permits that at runtime under Hardened Runtime.
+    -->
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+
+    <!--
+      Disable library validation.
+      Permits the app to load dynamic libraries that are not signed by
+      Apple or the same team — necessary for native Node.js add-ons and
+      Electron's own helper frameworks.
+    -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+
+    <!--
+      Network client access.
+      Required for the launcher to connect to MyFTB servers, the Minecraft
+      authentication endpoints, and for auto-update checks.
+    -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+
+    <!--
+      File access — user-selected files (read/write).
+      Allows the user to choose a custom Minecraft installation directory
+      via an open/save dialog and have the launcher read and write to it.
+    -->
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+
+    <!--
+      File access — Downloads folder (read/write).
+      Lets the launcher write mod pack files and game assets to the
+      user's Downloads folder when selected as a destination.
+    -->
+    <key>com.apple.security.files.downloads.read-write</key>
+    <true/>
+
+    <!--
+      Child process creation.
+      The launcher spawns the Minecraft Java process as a child; this
+      entitlement is required for that under the App Sandbox.
+
+      NOTE: If you ever enable the full App Sandbox
+      (com.apple.security.app-sandbox: true), you must also add
+      com.apple.security.inherit for the helper processes.  The launcher
+      currently runs WITHOUT the full sandbox (which is typical for
+      games / launchers distributed outside the Mac App Store).
+    -->
+    <key>com.apple.security.cs.debugger</key>
+    <false/>
+
+  </dict>
+</plist>
