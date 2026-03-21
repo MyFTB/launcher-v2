@@ -1,6 +1,6 @@
 {
   "name": "myftb-launcher",
-  "version": "2.0.0",
+  "version": "2.0.0-alpha",
   "description": "MyFTB Minecraft Modpack Launcher",
   "main": "out/main/index.js",
   "scripts": {
@@ -61,11 +61,20 @@
     "protocols": [
       {
         "name": "MyFTB Launcher",
-        "schemes": ["myftb"]
+        "schemes": [
+          "myftb"
+        ]
       }
     ],
     "win": {
-      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
       "icon": "resources/icon.ico"
     },
     "nsis": {
@@ -77,7 +86,13 @@
     },
     "mac": {
       "target": [
-        { "target": "dmg", "arch": ["x64", "arm64"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
       ],
       "icon": "resources/icon.icns",
       "category": "public.app-category.games",
@@ -87,7 +102,10 @@
       "entitlementsInherit": "resources/entitlements.mac.plist"
     },
     "linux": {
-      "target": ["AppImage", "deb"],
+      "target": [
+        "AppImage",
+        "deb"
+      ],
       "icon": "resources/icon.png",
       "category": "Game"
     },
