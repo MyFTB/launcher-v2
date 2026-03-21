@@ -44,7 +44,30 @@ function sha256Hex(input: string): string {
   return crypto.createHash('sha256').update(input).digest('hex')
 }
 
-// ─── Service ─────────────────────────────────────────────────────────────────
+/**
+ * Fetch a post page and extract OG/meta tags for image, excerpt, and date.
+ * Returns partial data — missing fields are simply undefined.
+ */
+async function fetchOgMeta(url: string): Promise<{ image?: string; excerpt?: string; date?: string }> {
+  try {
+    const response = await fetchWithTimeout(url)
+    const html = await response.text()
+    const meta = (prop: string): string | undefined => {
+      const m = html.match(new RegExp(`<meta[^>]+property="${prop}"[^>]+content="([^"]+)"`))
+               ?? html.match(new RegExp(`<meta[^>]+content="([^"]+)"[^>]+property="${prop}"`))
+      return m?.[1]
+    }
+    return {
+      image: meta('og:image:url') ?? meta('og:image'),
+      excerpt: meta('og:description'),
+      date: meta('article:published_time'),
+    }
+  } catch {
+    return {}
+  }
+}
+
+
 
 class ModpackApiService {
   // ── Pack list cache ────────────────────────────────────────────────────────
@@ -128,9 +151,16 @@ class ModpackApiService {
 
       try {
         const response = await fetchWithTimeout(Constants.postsApi)
-        const data = (await response.json()) as Post[]
-        this.cachedPosts = data
-        return data
+        const data = (await response.json()) as { title: string; url: string }[]
+        const enriched: Post[] = await Promise.all(
+          data.map(async (post) => {
+            const og = await fetchOgMeta(post.url)
+            const slug = post.url.split('/').pop() ?? ''
+            return { title: post.title, url: post.url, slug, ...og }
+          }),
+        )
+        this.cachedPosts = enriched
+        return enriched
       } catch (err) {
         console.error('[ModpackApiService] Failed to fetch posts:', err)
         return []
