@@ -196,11 +196,12 @@ export interface UploadLogResult { url: string }
 // Posts (myftb.de blog)
 export interface Post {
   title: string
+  url: string
   excerpt?: string
-  slug: string
   date?: string
   image?: string
-  url?: string
+  tags?: string
+  category?: string
 }
 
 // ─── Electron API (exposed via preload) ──────────────────────

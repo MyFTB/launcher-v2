@@ -78,7 +78,6 @@ class ModpackApiService {
 
   // ── Posts cache ───────────────────────────────────────────────────────────
 
-  /** Posts are cached for the lifetime of the process (session cache). */
   private cachedPosts: Post[] | null = null
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
@@ -155,8 +154,7 @@ class ModpackApiService {
         const enriched: Post[] = await Promise.all(
           data.map(async (post) => {
             const og = await fetchOgMeta(post.url)
-            const slug = post.url.split('/').pop() ?? ''
-            return { title: post.title, url: post.url, slug, ...og }
+            return { title: post.title, url: post.url, ...og }
           }),
         )
         this.cachedPosts = enriched

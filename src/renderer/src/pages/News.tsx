@@ -29,8 +29,6 @@ function SkeletonCard(): JSX.Element {
 }
 
 function PostCard({ post }: { post: Post }): JSX.Element {
-  const url = post.url ?? `https://myftb.de/blog/${post.slug}`
-
   return (
     <article className="card flex flex-col overflow-hidden hover:border-border-focus transition-colors duration-150 group">
       {post.image && (
@@ -50,10 +48,14 @@ function PostCard({ post }: { post: Post }): JSX.Element {
           <p className="text-sm text-text-secondary line-clamp-3 flex-1">{post.excerpt}</p>
         )}
         <div className="flex items-center justify-between pt-2 mt-auto">
-          <time className="text-xs text-text-muted">{formatDate(post.date)}</time>
+          {post.date ? (
+            <time className="text-xs text-text-muted">{formatDate(post.date)}</time>
+          ) : (
+            <span />
+          )}
           <button
             className="btn-secondary text-xs px-3 py-1.5"
-            onClick={() => window.electronAPI.systemOpenUrl(url)}
+            onClick={() => window.electronAPI.systemOpenUrl(post.url)}
           >
             Weiterlesen
           </button>
@@ -72,15 +74,9 @@ export default function News(): JSX.Element {
     let cancelled = false
     window.electronAPI
       .packsGetPosts()
-      .then((data) => {
-        if (!cancelled) setPosts(data)
-      })
-      .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : 'Fehler beim Laden der Beiträge')
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
+      .then((data) => { if (!cancelled) setPosts(data) })
+      .catch((err) => { if (!cancelled) setError(err instanceof Error ? err.message : 'Fehler beim Laden der Beiträge') })
+      .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [])
 
@@ -112,11 +108,21 @@ export default function News(): JSX.Element {
           </button>
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {posts.map((post, i) => (
-            <PostCard key={post.slug || i} post={post} />
-          ))}
-        </div>
+        <>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {posts.map((post, i) => (
+              <PostCard key={post.url || i} post={post} />
+            ))}
+          </div>
+          <div className="mt-8 flex justify-center">
+            <button
+              className="btn-secondary px-6 py-2"
+              onClick={() => window.electronAPI.systemOpenUrl('https://myftb.de/')}
+            >
+              Weitere Beiträge →
+            </button>
+          </div>
+        </>
       )}
     </div>
   )
