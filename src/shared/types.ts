@@ -218,11 +218,12 @@ export interface ElectronAPI {
   packsGetManifest(location: string): Promise<ModpackManifest>
   packsGetPosts(): Promise<Post[]>
   packsGetLogo(location: string, name: string, logo?: string): Promise<string | null>
+  packsReload(): Promise<void>
 
   // Install
   installModpack(reference: ModpackManifestReference, selectedFeatures?: string[]): Promise<void>
   installCancel(): Promise<void>
-  installGetInstalled(): Promise<string[]>
+  installGetInstalled(): Promise<{ name: string; version: string }[]>
 
   // Launch
   launchStart(packName: string): Promise<void>

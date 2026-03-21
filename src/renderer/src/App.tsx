@@ -8,6 +8,12 @@ import InstalledPacks from './pages/InstalledPacks'
 import Settings from './pages/Settings'
 import Console from './pages/Console'
 import News from './pages/News'
+import {
+  getKnownPacks,
+  getStoredNewPacks,
+  saveStoredNewPacks,
+  dispatchNewPackCount,
+} from './utils/packBadge'
 
 function TerminalIcon(): JSX.Element {
   return (
@@ -44,6 +50,25 @@ export default function App(): JSX.Element {
 
   useEffect(() => {
     window.electronAPI.configGet().catch(console.error)
+  }, [])
+
+  // Background pack check on startup so Sidebar badge shows before visiting Available Packs
+  useEffect(() => {
+    window.electronAPI.packsGetRemote()
+      .then((remote) => {
+        const remoteNames = remote.map((p) => p.name)
+        const remoteSet = new Set(remoteNames)
+        const known = getKnownPacks()
+        if (known.size === 0) return // first run, skip — AvailablePacks will seed on first visit
+        const stored = getStoredNewPacks()
+        for (const n of remoteNames) { if (!known.has(n)) stored.add(n) }
+        const pruned = new Set([...stored].filter((n) => remoteSet.has(n)))
+        if (pruned.size > 0) {
+          saveStoredNewPacks(Array.from(pruned))
+          dispatchNewPackCount(pruned.size)
+        }
+      })
+      .catch(() => {})
   }, [])
 
   // Allow other components to open the console via custom event

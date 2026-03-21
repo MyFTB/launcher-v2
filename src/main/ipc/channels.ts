@@ -23,6 +23,8 @@ export const IpcChannels = {
   PACKS_GET_MANIFEST: 'packs:get-manifest',
   /** Renderer→Main: Get blog posts */
   PACKS_GET_POSTS: 'packs:get-posts',
+  /** Renderer→Main: Clear remote pack list cache (force re-fetch) */
+  PACKS_RELOAD: 'packs:reload',
   /** Renderer→Main: Get pack logo (returns base64 data URL or null) */
   PACKS_GET_LOGO: 'packs:get-logo',
 

@@ -1,6 +1,67 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef, KeyboardEvent } from 'react'
 import type { LauncherConfig, SystemInfoResult, LauncherProfile } from '@shared/types'
 import LoginModal from '../components/LoginModal'
+
+// ─── PackKey chip input ────────────────────────────────────────────────────────
+
+function PackKeyInput({ value, onChange }: { value: string; onChange: (v: string) => void }): JSX.Element {
+  const keys = value.split(',').map((k) => k.trim()).filter(Boolean)
+  const [input, setInput] = useState('')
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  const addKey = (raw: string) => {
+    const trimmed = raw.trim().replace(/,/g, '')
+    if (!trimmed || keys.includes(trimmed)) return
+    onChange([...keys, trimmed].join(','))
+    setInput('')
+  }
+
+  const removeKey = (k: string) => {
+    onChange(keys.filter((x) => x !== k).join(','))
+  }
+
+  const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' || e.key === ',') {
+      e.preventDefault()
+      addKey(input)
+    } else if (e.key === 'Backspace' && input === '' && keys.length > 0) {
+      removeKey(keys[keys.length - 1])
+    }
+  }
+
+  return (
+    <div
+      className="input flex flex-wrap gap-1.5 min-h-[38px] h-auto cursor-text"
+      onClick={() => inputRef.current?.focus()}
+    >
+      {keys.map((k) => (
+        <span
+          key={k}
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-accent/20 border border-accent/40 text-xs text-accent font-mono"
+        >
+          {k}
+          <button
+            type="button"
+            className="text-accent/60 hover:text-accent leading-none"
+            onClick={(e) => { e.stopPropagation(); removeKey(k) }}
+          >
+            ×
+          </button>
+        </span>
+      ))}
+      <input
+        ref={inputRef}
+        type="text"
+        className="flex-1 min-w-[120px] bg-transparent outline-none text-sm text-text-primary placeholder:text-text-muted"
+        placeholder={keys.length === 0 ? 'Zugangscode eingeben…' : 'Weiteren Schlüssel hinzufügen…'}
+        value={input}
+        onChange={(e) => setInput(e.target.value)}
+        onKeyDown={handleKeyDown}
+        onBlur={() => { if (input.trim()) addKey(input) }}
+      />
+    </div>
+  )
+}
 
 const MINECRAFT_MIN_MB = 1024 // practical minimum to run Minecraft
 const RAM_CAP_RATIO = 0.75    // leave 25 % for OS + background processes
@@ -264,20 +325,14 @@ export default function Settings(): JSX.Element {
           Launcher
         </h2>
 
-        {/* Pack Key */}
+        {/* Pack Keys */}
         <div>
           <label className="block text-xs font-medium text-text-secondary mb-1.5">
-            Pack Key
+            Pack Keys
           </label>
-          <input
-            type="text"
-            className="input"
-            placeholder="Dein Pack-Zugangscode"
-            value={form.packKey}
-            onChange={(e) => update('packKey', e.target.value)}
-          />
+          <PackKeyInput value={form.packKey} onChange={(v) => update('packKey', v)} />
           <p className="text-xs text-text-muted mt-1">
-            Ermöglicht den Zugriff auf private Modpacks.
+            Zugangscodes für private Modpacks. Enter oder Komma zum Hinzufügen, Backspace zum Entfernen.
           </p>
         </div>
 

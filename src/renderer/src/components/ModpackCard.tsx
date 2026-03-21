@@ -5,6 +5,8 @@ interface ModpackCardProps {
   manifest: ModpackManifest | ModpackManifestReference
   isInstalled: boolean
   isRunning: boolean
+  hasUpdate?: boolean
+  isNew?: boolean
   onInstall?: () => void
   onPlay?: () => void
   onContextMenu?: (e: React.MouseEvent) => void
@@ -29,6 +31,8 @@ export default function ModpackCard({
   manifest,
   isInstalled,
   isRunning,
+  hasUpdate,
+  isNew,
   onInstall,
   onPlay,
   onContextMenu,
@@ -81,6 +85,18 @@ export default function ModpackCard({
           <div className="absolute top-2 right-2 flex items-center gap-1.5 bg-black/60 backdrop-blur-sm rounded-full px-2 py-1">
             <span className="w-2 h-2 rounded-full bg-accent animate-pulse" />
             <span className="text-xs font-medium text-accent">Läuft...</span>
+          </div>
+        )}
+
+        {/* Update / New badges */}
+        {hasUpdate && (
+          <div className="absolute top-2 left-2 px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-500/90 text-black backdrop-blur-sm">
+            Update
+          </div>
+        )}
+        {!hasUpdate && isNew && (
+          <div className="absolute top-2 left-2 px-2 py-0.5 rounded-full text-xs font-semibold bg-accent/90 text-white backdrop-blur-sm">
+            Neu
           </div>
         )}
 

@@ -1,4 +1,6 @@
 import { NavLink } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { getStoredNewPacks } from '../utils/packBadge'
 
 /** Icons as SVG strings — replace with lucide-react or heroicons once added */
 const HomeIcon = () => (
@@ -46,6 +48,15 @@ const navItems = [
 ]
 
 export default function Sidebar(): JSX.Element {
+  const [newPacksCount, setNewPacksCount] = useState(() => getStoredNewPacks().size)
+
+  useEffect(() => {
+    const handler = (e: Event): void => {
+      setNewPacksCount((e as CustomEvent<{ count: number }>).detail.count)
+    }
+    window.addEventListener('myftb:newpacks', handler)
+    return () => window.removeEventListener('myftb:newpacks', handler)
+  }, [])
   return (
     <nav className="flex flex-col w-14 hover:w-52 transition-all duration-200 bg-bg-surface border-r border-border flex-shrink-0 overflow-hidden group">
       {/* Logo */}
@@ -60,7 +71,9 @@ export default function Sidebar(): JSX.Element {
 
       {/* Nav links */}
       <div className="flex flex-col flex-1 py-2">
-        {navItems.map(({ to, label, Icon }) => (
+        {navItems.map(({ to, label, Icon }) => {
+          const badge = to === '/available' ? newPacksCount : 0
+          return (
           <NavLink
             key={to}
             to={to}
@@ -72,14 +85,23 @@ export default function Sidebar(): JSX.Element {
               }`
             }
           >
-            <span className="w-14 flex justify-center flex-shrink-0">
+            <span className="w-14 flex justify-center flex-shrink-0 relative">
               <Icon />
+              {badge > 0 && (
+                <span className="absolute top-0 right-2 w-2 h-2 rounded-full bg-accent group-hover:hidden" />
+              )}
             </span>
-            <span className="opacity-0 group-hover:opacity-100 transition-opacity duration-200 whitespace-nowrap pr-4">
+            <span className="flex-1 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200 whitespace-nowrap pr-4">
               {label}
+              {badge > 0 && (
+                <span className="px-1.5 py-0.5 rounded-full text-xs font-bold bg-accent text-white leading-none">
+                  {badge}
+                </span>
+              )}
             </span>
           </NavLink>
-        ))}
+          )
+        })}
       </div>
 
       {/* Settings at bottom */}

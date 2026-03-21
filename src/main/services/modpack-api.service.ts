@@ -87,6 +87,16 @@ class ModpackApiService {
     this.handleGetManifest()
     this.handleGetPosts()
     this.handleGetLogo()
+    this.handleReload()
+  }
+
+  // ── packs:reload ──────────────────────────────────────────────────────────
+
+  private handleReload(): void {
+    ipcMain.handle(IpcChannels.PACKS_RELOAD, () => {
+      this.cachedPackList = null
+      this.cachedPackKey = null
+    })
   }
 
   // ── packs:get-remote ──────────────────────────────────────────────────────

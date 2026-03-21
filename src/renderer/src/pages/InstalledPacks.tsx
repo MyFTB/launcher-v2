@@ -13,7 +13,9 @@ interface ContextMenuState {
 export default function InstalledPacks(): JSX.Element {
   const navigate = useNavigate()
   const [packs, setPacks] = useState<ModpackManifestReference[]>([])
+  const [updateMap, setUpdateMap] = useState<Record<string, boolean>>({})
   const [loading, setLoading] = useState(true)
+  const [reloading, setReloading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [launchState, setLaunchState] = useState<LaunchState | null>(null)
   const [runningPack, setRunningPack] = useState<string | null>(null)
@@ -21,30 +23,41 @@ export default function InstalledPacks(): JSX.Element {
   const [uploadMessage, setUploadMessage] = useState<string | null>(null)
   const uploadTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  const loadPacks = useCallback(async (bustCache = false) => {
+    try {
+      if (bustCache) await window.electronAPI.packsReload()
+      const [remote, installed] = await Promise.all([
+        window.electronAPI.packsGetRemote(),
+        window.electronAPI.installGetInstalled(),
+      ])
+
+      const installedSet = new Set(installed.map((p) => p.name))
+      const installedVersions = Object.fromEntries(installed.map((p) => [p.name, p.version]))
+      const filtered = remote.filter((p) => installedSet.has(p.name))
+      const updates: Record<string, boolean> = {}
+      for (const p of filtered) {
+        updates[p.name] = installedVersions[p.name] !== p.version
+      }
+
+      setPacks(filtered)
+      setUpdateMap(updates)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Fehler beim Laden der installierten Modpacks')
+    }
+  }, [])
+
   useEffect(() => {
     let cancelled = false
-    async function load(): Promise<void> {
-      try {
-        const [remote, installedNames] = await Promise.all([
-          window.electronAPI.packsGetRemote(),
-          window.electronAPI.installGetInstalled(),
-        ])
-        if (cancelled) return
-
-        const installedSet = new Set(installedNames)
-        const installed = remote.filter((p) => installedSet.has(p.name))
-        setPacks(installed)
-      } catch (err) {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : 'Fehler beim Laden der installierten Modpacks')
-        }
-      } finally {
-        if (!cancelled) setLoading(false)
-      }
-    }
-    load()
+    loadPacks().finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [])
+  }, [loadPacks])
+
+  const handleReload = useCallback(async () => {
+    setReloading(true)
+    setError(null)
+    await loadPacks(true)
+    setReloading(false)
+  }, [loadPacks])
 
   // Subscribe to launch state events
   useEffect(() => {
@@ -88,7 +101,7 @@ export default function InstalledPacks(): JSX.Element {
       setUploadMessage(`Crashbericht hochgeladen: ${url}`)
       if (uploadTimeoutRef.current) clearTimeout(uploadTimeoutRef.current)
       uploadTimeoutRef.current = setTimeout(() => setUploadMessage(null), 8000)
-    } catch (err) {
+    } catch {
       setUploadMessage('Fehler beim Hochladen des Crashberichts.')
       uploadTimeoutRef.current = setTimeout(() => setUploadMessage(null), 4000)
     }
@@ -121,6 +134,7 @@ export default function InstalledPacks(): JSX.Element {
   }
 
   const isGameRunning = launchState === 'running' || launchState === 'launching'
+  const updateCount = Object.values(updateMap).filter(Boolean).length
 
   return (
     <div className="p-6 animate-fade-in">
@@ -132,6 +146,14 @@ export default function InstalledPacks(): JSX.Element {
           </p>
         </div>
         <div className="flex items-center gap-3">
+          {updateCount > 0 && (
+            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-500/15 border border-amber-500/30">
+              <span className="w-2 h-2 rounded-full bg-amber-400" />
+              <span className="text-xs font-medium text-amber-400">
+                {updateCount} Update{updateCount !== 1 ? 's' : ''} verfügbar
+              </span>
+            </div>
+          )}
           {isGameRunning && (
             <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-accent/10 border border-accent/30">
               <span className="w-2 h-2 rounded-full bg-accent animate-pulse" />
@@ -140,6 +162,20 @@ export default function InstalledPacks(): JSX.Element {
               </span>
             </div>
           )}
+          <button
+            className="btn-ghost text-xs flex items-center gap-1.5"
+            onClick={handleReload}
+            disabled={reloading || loading}
+            title="Liste aktualisieren"
+          >
+            <svg
+              viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}
+              className={`w-4 h-4 ${reloading ? 'animate-spin' : ''}`}
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            {reloading ? 'Laden...' : 'Aktualisieren'}
+          </button>
           <button
             className="btn-ghost text-xs"
             onClick={() => window.dispatchEvent(new CustomEvent('open-console'))}
@@ -195,6 +231,7 @@ export default function InstalledPacks(): JSX.Element {
               manifest={pack}
               isInstalled={true}
               isRunning={runningPack === pack.name}
+              hasUpdate={updateMap[pack.name]}
               onPlay={() => handlePlay(pack.name)}
               onContextMenu={(e) => handleContextMenu(e, pack.name)}
             />

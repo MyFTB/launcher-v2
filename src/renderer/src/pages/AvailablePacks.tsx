@@ -7,12 +7,22 @@ import type {
 import ModpackCard from '../components/ModpackCard'
 import ProgressModal from '../components/ProgressModal'
 import FeatureModal from '../components/FeatureModal'
+import {
+  getKnownPacks,
+  saveKnownPacks,
+  getStoredNewPacks,
+  saveStoredNewPacks,
+  clearStoredNewPacks,
+  dispatchNewPackCount,
+} from '../utils/packBadge'
 
 export default function AvailablePacks(): JSX.Element {
   const [remotePacks, setRemotePacks] = useState<ModpackManifestReference[]>([])
   const [installedNames, setInstalledNames] = useState<Set<string>>(new Set())
+  const [newPackNames, setNewPackNames] = useState<Set<string>>(new Set())
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
+  const [reloading, setReloading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   // Installation state
@@ -24,29 +34,63 @@ export default function AvailablePacks(): JSX.Element {
   const [pendingFeaturesPack, setPendingFeaturesPack] = useState<ModpackManifestReference | null>(null)
   const [pendingFeatures, setPendingFeatures] = useState<Feature[]>([])
 
+  const loadPacks = useCallback(async (bustCache = false) => {
+    try {
+      if (bustCache) await window.electronAPI.packsReload()
+      const [remote, installed] = await Promise.all([
+        window.electronAPI.packsGetRemote(),
+        window.electronAPI.installGetInstalled(),
+      ])
+
+      const remoteNames = remote.map((p) => p.name)
+      const remoteSet = new Set(remoteNames)
+      const known = getKnownPacks()
+
+      // New packs = in current list but not in last-seen list.
+      // Skip on very first run (empty known = seed silently).
+      const newOnes = known.size === 0
+        ? new Set<string>()
+        : new Set(remoteNames.filter((n) => !known.has(n)))
+
+      // Always replace knownPacks with the current list so removed packs don't
+      // stay "known" and can be flagged as new again if they reappear.
+      saveKnownPacks(remoteNames)
+
+      // Persist for sidebar startup badge; merge + drop departed packs.
+      const stored = getStoredNewPacks()
+      for (const n of newOnes) stored.add(n)
+      const pruned = new Set([...stored].filter((n) => remoteSet.has(n)))
+      saveStoredNewPacks(Array.from(pruned))
+      dispatchNewPackCount(pruned.size)
+
+      setRemotePacks(remote)
+      setInstalledNames(new Set(installed.map((p) => p.name)))
+      setNewPackNames(pruned)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Fehler beim Laden der Modpacks')
+    }
+  }, [])
+
   useEffect(() => {
     let cancelled = false
-    async function load(): Promise<void> {
-      try {
-        const [remote, installedNames] = await Promise.all([
-          window.electronAPI.packsGetRemote(),
-          window.electronAPI.installGetInstalled(),
-        ])
-        if (cancelled) return
-
-        setRemotePacks(remote)
-        setInstalledNames(new Set(installedNames))
-      } catch (err) {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : 'Fehler beim Laden der Modpacks')
-        }
-      } finally {
-        if (!cancelled) setLoading(false)
-      }
-    }
-    load()
+    loadPacks().finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
+  }, [loadPacks])
+
+  // On unmount: user has seen the new packs — clear the persistent badge.
+  useEffect(() => {
+    return () => {
+      clearStoredNewPacks()
+      dispatchNewPackCount(0)
+    }
   }, [])
+
+  const handleReload = useCallback(async () => {
+    setReloading(true)
+    setError(null)
+    await loadPacks(true)
+    setReloading(false)
+  }, [loadPacks])
 
   // Subscribe to install events
   useEffect(() => {
@@ -56,9 +100,8 @@ export default function AvailablePacks(): JSX.Element {
     const unsubComplete = window.electronAPI.on('install:complete', (...args: unknown[]) => {
       const event = args[0] as { success: boolean; error?: string }
       if (event.success && installingPack) {
-        // Refresh from disk so the installed set is authoritative
         window.electronAPI.installGetInstalled()
-          .then((names) => setInstalledNames(new Set(names)))
+          .then((infos) => setInstalledNames(new Set(infos.map((p) => p.name))))
           .catch(() => {})
       }
       setInstallProgress(null)
@@ -120,18 +163,41 @@ export default function AvailablePacks(): JSX.Element {
     setPendingFeatures([])
   }, [])
 
-  const filteredPacks = remotePacks.filter(
-    (p) => !installedNames.has(p.name) &&
-      p.title.toLowerCase().includes(search.toLowerCase())
-  )
+  const filteredPacks = remotePacks
+    .filter(
+      (p) => !installedNames.has(p.name) &&
+        p.title.toLowerCase().includes(search.toLowerCase())
+    )
+    .sort((a, b) => {
+      const aNew = newPackNames.has(a.name)
+      const bNew = newPackNames.has(b.name)
+      if (aNew === bNew) return 0
+      return aNew ? -1 : 1
+    })
 
   return (
     <div className="p-6 animate-fade-in">
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-text-primary">Verfügbare Modpacks</h1>
-        <p className="text-text-secondary mt-1 text-sm">
-          Entdecke und installiere neue Modpacks.
-        </p>
+      <div className="mb-6 flex items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-text-primary">Verfügbare Modpacks</h1>
+          <p className="text-text-secondary mt-1 text-sm">
+            Entdecke und installiere neue Modpacks.
+          </p>
+        </div>
+        <button
+          className="btn-ghost text-xs flex items-center gap-1.5"
+          onClick={handleReload}
+          disabled={reloading || loading}
+          title="Liste aktualisieren"
+        >
+          <svg
+            viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}
+            className={`w-4 h-4 ${reloading ? 'animate-spin' : ''}`}
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+          {reloading ? 'Laden...' : 'Aktualisieren'}
+        </button>
       </div>
 
       {/* Search bar */}
@@ -194,6 +260,7 @@ export default function AvailablePacks(): JSX.Element {
               manifest={pack}
               isInstalled={false}
               isRunning={false}
+              isNew={newPackNames.has(pack.name)}
               onInstall={() => handleInstall(pack)}
             />
           ))}

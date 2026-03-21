@@ -193,7 +193,7 @@ class InstallService {
 
     ipcMain.handle(IpcChannels.INSTALL_GET_INSTALLED, async () => {
       const packs = await this.getInstalledPacks()
-      return packs.map((p) => p.name)
+      return packs.map((p) => ({ name: p.name, version: p.version }))
     })
   }
 

@@ -18,6 +18,7 @@ const api: ElectronAPI = {
   packsGetRemote: () => ipcRenderer.invoke('packs:get-remote'),
   packsGetManifest: (location) => ipcRenderer.invoke('packs:get-manifest', { location }),
   packsGetPosts: () => ipcRenderer.invoke('packs:get-posts'),
+  packsReload: () => ipcRenderer.invoke('packs:reload'),
   packsGetLogo: (location, name, logo) => ipcRenderer.invoke('packs:get-logo', { location, name, logo }),
 
   // ── Install ───────────────────────────────────────────────
