@@ -59,7 +59,7 @@ export default function Sidebar() {
         <div className="w-14 flex justify-center flex-shrink-0">
           <img src={logoUrl} alt="MyFTB" className="w-8 h-8" draggable={false} />
         </div>
-        <span className="text-sm font-bold text-text-primary opacity-0 group-hover:opacity-100 transition-opacity duration-200 whitespace-nowrap">
+        <span className="text-sm font-bold text-text-primary opacity-0 group-hover:opacity-100 transition-opacity duration-150 ease-out whitespace-nowrap">
           MyFTB
         </span>
       </div>
@@ -73,10 +73,10 @@ export default function Sidebar() {
             key={to}
             to={to}
             className={({ isActive }) =>
-              `flex items-center py-3 text-sm transition-colors duration-150 no-drag ${
+              `flex items-center py-3 text-sm transition-[background-color,color,transform] duration-150 no-drag ${
                 isActive
                   ? 'text-accent bg-accent/10 border-r-2 border-accent'
-                  : 'text-text-secondary hover:text-text-primary hover:bg-bg-elevated'
+                  : 'text-text-secondary hover:text-text-primary hover:bg-bg-elevated active:scale-[0.98]'
               }`
             }
           >
@@ -86,7 +86,7 @@ export default function Sidebar() {
                 <span className="absolute top-0 right-2 w-2 h-2 rounded-full bg-accent group-hover:hidden" />
               )}
             </span>
-            <span className="flex-1 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200 whitespace-nowrap pr-4">
+            <span className="flex-1 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-150 whitespace-nowrap pr-4">
               {label}
               {badge > 0 && (
                 <span className="px-1.5 py-0.5 rounded-full text-xs font-bold bg-accent text-black leading-none">
@@ -104,17 +104,17 @@ export default function Sidebar() {
         <NavLink
           to="/settings"
           className={({ isActive }) =>
-            `flex items-center py-3 text-sm transition-colors duration-150 no-drag ${
+            `flex items-center py-3 text-sm transition-[background-color,color,transform] duration-150 no-drag ${
               isActive
                 ? 'text-accent bg-accent/10 border-r-2 border-accent'
-                : 'text-text-secondary hover:text-text-primary hover:bg-bg-elevated'
+                : 'text-text-secondary hover:text-text-primary hover:bg-bg-elevated active:scale-[0.98]'
             }`
           }
         >
           <span className="w-14 flex justify-center flex-shrink-0">
             <GearIcon />
           </span>
-          <span className="opacity-0 group-hover:opacity-100 transition-opacity duration-200 whitespace-nowrap pr-4">
+          <span className="opacity-0 group-hover:opacity-100 transition-opacity duration-150 whitespace-nowrap pr-4">
             Einstellungen
           </span>
         </NavLink>

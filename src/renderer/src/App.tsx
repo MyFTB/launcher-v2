@@ -186,7 +186,7 @@ export default function App() {
           {!consoleOpen && (
             <button
               onClick={() => setConsoleOpen(true)}
-              className="absolute bottom-4 right-4 w-11 h-11 rounded-full flex items-center justify-center shadow-lg transition-all duration-200 no-drag z-10 bg-bg-overlay text-text-secondary hover:bg-bg-elevated hover:text-text-primary border border-border"
+              className={`absolute bottom-4 right-4 w-11 h-11 rounded-full flex items-center justify-center shadow-lg transition-all duration-200 ease-out no-drag z-10 bg-bg-overlay text-text-secondary hover:bg-bg-elevated hover:text-text-primary hover:scale-105 hover:border-border-focus/40 active:scale-95 border border-border ${isGameActive ? 'hover:shadow-[0_0_20px_rgba(131,218,56,0.25)]' : ''}`}
               title="Konsole öffnen"
             >
               <TerminalIcon />

@@ -30,7 +30,7 @@ function SkeletonCard() {
 
 function PostCard({ post }: { post: Post }) {
   return (
-    <article className="card flex flex-col overflow-hidden hover:border-border-focus transition-colors duration-150 group">
+    <article className="card-interactive flex flex-col overflow-hidden group">
       {post.image && (
         <div className="w-full h-40 overflow-hidden bg-bg-elevated flex-shrink-0">
           <img

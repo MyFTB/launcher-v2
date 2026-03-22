@@ -48,7 +48,7 @@ export default function ContextMenu({ x, y, items, onClose }: ContextMenuProps) 
       {items.map((item, index) => (
         <button
           key={index}
-          className={`w-full text-left px-4 py-2 text-sm transition-colors duration-100 hover:bg-bg-overlay ${
+          className={`w-full text-left px-4 py-2 text-sm transition-[background-color,color,transform] duration-150 hover:bg-bg-overlay active:scale-[0.98] ${
             item.danger ? 'text-red-400 hover:text-red-300' : 'text-text-primary'
           }`}
           onClick={() => {

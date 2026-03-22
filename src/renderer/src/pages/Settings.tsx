@@ -287,10 +287,10 @@ export default function Settings() {
               return (
                 <div
                   key={p.uuid}
-                  className={`flex items-center gap-3 px-3 py-2.5 rounded-lg border ${
+                  className={`flex items-center gap-3 px-3 py-2.5 rounded-lg border transition-[background-color,border-color,transform] duration-150 ${
                     isSelected
                       ? 'border-accent/40 bg-accent/5'
-                      : 'border-border bg-bg-elevated cursor-pointer hover:border-border-focus/30'
+                      : 'border-border bg-bg-elevated cursor-pointer hover:bg-bg-overlay hover:border-border-focus/30 active:scale-[0.99]'
                   }`}
                   onClick={() => !isSelected && handleSwitchProfile(p.uuid)}
                 >

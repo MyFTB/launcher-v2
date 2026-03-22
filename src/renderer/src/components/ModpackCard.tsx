@@ -56,7 +56,7 @@ export default function ModpackCard({
 
   return (
     <div
-      className="card relative flex flex-col overflow-hidden group cursor-pointer transition-all duration-200 hover:border-border-focus hover:shadow-[0_4px_24px_rgba(131,218,56,0.2)]"
+      className="card-interactive relative flex flex-col overflow-hidden group cursor-pointer"
       onContextMenu={onContextMenu}
     >
       {/* Logo area */}
@@ -69,8 +69,8 @@ export default function ModpackCard({
           />
         ) : (
           <div className="w-full h-full flex items-center justify-center">
-            <div className="w-12 h-12 rounded-lg bg-bg-overlay flex items-center justify-center">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="w-6 h-6 text-text-muted">
+            <div className="w-14 h-14 rounded-xl bg-bg-overlay flex items-center justify-center">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-7 h-7 text-text-muted">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
               </svg>
             </div>
@@ -79,7 +79,7 @@ export default function ModpackCard({
 
         {/* Running pulse indicator */}
         {isRunning && (
-          <div className="absolute top-2 right-2 flex items-center gap-1.5 bg-black/60 backdrop-blur-sm rounded-full px-2 py-1">
+          <div className="absolute top-2 right-2 flex items-center gap-1.5 bg-bg-base/75 backdrop-blur-sm rounded-full px-2 py-1">
             <span className="w-2 h-2 rounded-full bg-accent animate-pulse" />
             <span className="text-xs font-medium text-accent">Läuft...</span>
           </div>

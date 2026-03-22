@@ -14,13 +14,15 @@ function RecentPackCard({ pack, onPlay }: { pack: ModpackManifestReference; onPl
   }, [pack.location, pack.name])
 
   return (
-    <div className="card flex items-center gap-4 p-4 hover:border-border-focus transition-colors duration-150 group">
+    <div className="card-interactive flex items-center gap-4 p-4 group">
       <div className="w-14 h-14 rounded-lg bg-bg-elevated flex-shrink-0 overflow-hidden">
         {logoUrl ? (
-          <img src={logoUrl} alt={pack.title} className="w-full h-full object-cover" />
+          <img src={logoUrl} alt={pack.title} className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105" />
         ) : (
           <div className="w-full h-full flex items-center justify-center">
-            <div className="w-6 h-6 rounded bg-bg-overlay" />
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-6 h-6 text-text-muted">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+            </svg>
           </div>
         )}
       </div>
@@ -143,7 +145,7 @@ export default function Home() {
                     {profiles.map((p) => (
                       <button
                         key={p.uuid}
-                        className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-bg-elevated transition-colors text-left"
+                        className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-bg-elevated active:scale-[0.98] transition-[background-color,transform] duration-150 text-left"
                         onClick={() => {
                           window.electronAPI.authSwitchProfile(p.uuid).catch(console.error)
                           setShowAccountPicker(false)
@@ -209,9 +211,12 @@ export default function Home() {
 
       {/* Recently played */}
       <section className="mb-8">
-        <h2 className="text-xs font-semibold text-text-muted uppercase tracking-widest mb-3">
-          Zuletzt gespielt
-        </h2>
+        <div className="flex items-center gap-3 mb-3">
+          <h2 className="text-xs font-semibold text-text-muted uppercase tracking-wider flex-shrink-0">
+            Zuletzt gespielt
+          </h2>
+          <div className="h-px bg-border flex-1" />
+        </div>
         {loading ? (
           <div className="space-y-3">
             {[0, 1, 2].map((i) => (
@@ -255,12 +260,15 @@ export default function Home() {
 
       {/* Community links */}
       <section>
-        <h2 className="text-xs font-semibold text-text-muted uppercase tracking-widest mb-3">
-          Community
-        </h2>
+        <div className="flex items-center gap-3 mb-3">
+          <h2 className="text-xs font-semibold text-text-muted uppercase tracking-wider flex-shrink-0">
+            Community
+          </h2>
+          <div className="h-px bg-border flex-1" />
+        </div>
         <div className="grid grid-cols-2 gap-3">
           <button
-            className="card flex items-center gap-4 px-5 py-4 hover:border-border-focus transition-colors duration-150 group text-left"
+            className="card-interactive flex items-center gap-4 px-5 py-4 group text-left w-full"
             onClick={() => window.electronAPI.systemOpenUrl('https://discord.gg/myftb')}
           >
             <div className="w-10 h-10 rounded-xl bg-indigo-500/15 flex items-center justify-center flex-shrink-0 group-hover:bg-indigo-500/25 transition-colors duration-150">
@@ -272,7 +280,7 @@ export default function Home() {
             </div>
           </button>
           <button
-            className="card flex items-center gap-4 px-5 py-4 hover:border-border-focus transition-colors duration-150 group text-left"
+            className="card-interactive flex items-center gap-4 px-5 py-4 group text-left w-full"
             onClick={() => window.electronAPI.systemOpenUrl('https://myftb.de')}
           >
             <div className="w-10 h-10 rounded-xl bg-accent/10 flex items-center justify-center flex-shrink-0 group-hover:bg-accent/20 transition-colors duration-150">

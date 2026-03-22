@@ -17,6 +17,9 @@
   --color-border: #3a3a3a;
   --color-border-focus: #83da38;
 
+  --color-danger: #f87171;
+  --color-warning: #fbbf24;
+
   --font-sans:
     'Outfit Variable', system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;
 
@@ -74,7 +77,7 @@
 }
 
 @utility btn {
-  @apply inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-all duration-150 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1 focus-visible:ring-offset-bg-base disabled:opacity-50 disabled:cursor-not-allowed no-drag;
+  @apply inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-all duration-150 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1 focus-visible:ring-offset-bg-base disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer no-drag;
 }
 
 @utility btn-primary {
@@ -82,7 +85,7 @@
 }
 
 @utility btn-secondary {
-  @apply btn bg-bg-elevated text-text-primary border border-border hover:bg-bg-overlay active:scale-95;
+  @apply btn bg-bg-elevated text-text-primary border border-border hover:bg-bg-overlay hover:border-border-focus/40 active:scale-95;
 }
 
 @utility btn-ghost {
@@ -93,8 +96,30 @@
   @apply btn bg-red-600 text-white hover:bg-red-700 active:scale-95;
 }
 
+@utility btn-sm {
+  @apply inline-flex items-center justify-center gap-1.5 rounded px-2.5 py-1.5 text-xs font-medium transition-all duration-150 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1 focus-visible:ring-offset-bg-base disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer no-drag;
+}
+
+@utility btn-sm-ghost {
+  @apply btn-sm bg-transparent text-text-secondary hover:text-text-primary hover:bg-bg-elevated active:scale-95;
+}
+
+@utility btn-sm-secondary {
+  @apply btn-sm bg-bg-elevated text-text-primary border border-border hover:bg-bg-overlay hover:border-border-focus/40 active:scale-95;
+}
+
+@utility btn-sm-danger {
+  @apply btn-sm bg-red-600 text-white hover:bg-red-700 active:scale-95;
+}
+
 @utility card {
   @apply rounded-xl bg-bg-surface border border-border;
+}
+
+@utility card-interactive {
+  @apply card transition-[border-color,box-shadow,background-color,transform] duration-200 cursor-pointer
+         hover:border-border-focus hover:bg-bg-elevated hover:shadow-[0_4px_24px_rgba(131,218,56,0.12)]
+         active:scale-[0.99];
 }
 
 @utility input {

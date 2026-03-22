@@ -206,7 +206,14 @@ export default function Console() {
   // Memoize line elements so onScroll (setAutoScroll) doesn't recreate 5000 elements per event
   const renderedLines = useMemo(() => {
     if (lines.length === 0) {
-      return <p className="text-text-muted py-4">Kein Log-Output vorhanden.</p>
+      return (
+        <div className="flex flex-col items-center justify-center h-full gap-2 select-none">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="w-8 h-8 text-text-muted">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 7.5l3 2.25-3 2.25m4.5 0h3m-9 8.25h13.5A2.25 2.25 0 0021 18V6a2.25 2.25 0 00-2.25-2.25H5.25A2.25 2.25 0 003 6v12a2.25 2.25 0 002.25 2.25z" />
+          </svg>
+          <p className="text-xs text-text-muted">Kein Log-Output vorhanden.</p>
+        </div>
+      )
     }
     return lines.map((line) => {
       const isCurrentMatch = filterText.trim() ? filteredLines[safeMatchIndex]?.id === line.id : false
@@ -318,7 +325,7 @@ export default function Console() {
 
           {/* Clear */}
           <button
-            className="btn-ghost text-xs py-1.5 px-2.5"
+            className="btn-sm-ghost"
             onClick={() => setLines([])}
           >
             Leeren
@@ -326,13 +333,13 @@ export default function Console() {
 
           {/* Upload log */}
           <button
-            className="btn-secondary text-xs py-1.5 flex items-center gap-1.5"
+            className="btn-sm-secondary flex items-center gap-1.5"
             onClick={handleUpload}
             disabled={uploading || lines.length === 0}
           >
             {uploading ? (
               <>
-                <svg className="animate-spin w-3 h-3 flex-shrink-0" viewBox="0 0 24 24" fill="none">
+                <svg className="animate-spin w-3.5 h-3.5 flex-shrink-0" viewBox="0 0 24 24" fill="none">
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z" />
                 </svg>
@@ -343,7 +350,7 @@ export default function Console() {
 
           {/* Kill button — visible when game is running */}
           {isRunning && (
-            <button className="btn-danger text-xs py-1.5" onClick={handleKill}>
+            <button className="btn-sm-danger" onClick={handleKill}>
               Minecraft beenden
             </button>
           )}
