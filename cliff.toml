@@ -1,0 +1,40 @@
+[changelog]
+header = """
+# Changelog
+
+All notable changes to this project will be documented here.
+Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+"""
+body = """
+## [{{ version | trim_start_matches(pat="v") }}]{% if timestamp %} — {{ timestamp | date(format="%Y-%m-%d") }}{% endif %}
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group }}
+{% for commit in commits | sort(attribute="message") %}
+- {% if commit.breaking %}**BREAKING** {% endif %}{{ commit.message | upper_first -}}
+{% endfor %}
+{% endfor %}
+"""
+trim = true
+footer = ""
+
+[git]
+conventional_commits = true
+filter_unconventional = true
+commit_parsers = [
+  { message = "^feat",     group = "🚀 Features" },
+  { message = "^fix",      group = "🐛 Bug Fixes" },
+  { message = "^perf",     group = "⚡ Performance" },
+  { message = "^refactor", group = "♻️ Refactoring" },
+  { message = "^design",   group = "🎨 Design" },
+  { message = "^docs",     group = "📚 Documentation" },
+  { message = "^test",     group = "🧪 Tests" },
+  # Skip noise from automated tooling
+  { message = "^chore\\(deps\\)", skip = true },
+  { message = "^chore",   skip = true },
+  { message = "^ci",      skip = true },
+  { message = "^build",   skip = true },
+]
+filter_commits = true
+tag_pattern = "v[0-9]*"
+sort_commits = "oldest"

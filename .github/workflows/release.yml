@@ -156,14 +156,10 @@ jobs:
   create-release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
-
-    # Wait for all platform builds to finish before finalising the release.
     needs:
       - build-windows
       - build-macos
       - build-linux
-
-    # Write permission is needed to create/edit GitHub Releases.
     permissions:
       contents: write
 
@@ -171,54 +167,51 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          # Fetch all history so the changelog step can compare commits.
           fetch-depth: 0
+          # Use a token that can push back to main (GITHUB_TOKEN works for
+          # repos without branch protection on main; use a PAT if needed).
+          token: ${{ secrets.GH_TOKEN || github.token }}
 
-      # Generate a simple changelog from commits since the previous tag.
-      # The output is used as the release body below.
-      - name: Generate changelog
-        id: changelog
+      # Generate release notes for this tag only (no header, just the body)
+      - name: Generate release notes
+        id: cliff
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --latest --strip header
+        env:
+          OUTPUT: RELEASE_NOTES.md
+          GITHUB_REPO: ${{ github.repository }}
+
+      # Regenerate the full CHANGELOG.md and commit it back to main
+      - name: Update CHANGELOG.md
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --output CHANGELOG.md
+        env:
+          GITHUB_REPO: ${{ github.repository }}
+
+      - name: Commit CHANGELOG.md
         run: |
-          PREVIOUS_TAG=$(git tag --sort=-version:refname | grep -E '^v[0-9]' | sed -n '2p')
-          CURRENT_TAG="${{ github.ref_name }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          # Only commit if there are actual changes
+          git diff --staged --quiet && echo "No changes to CHANGELOG.md" && exit 0
+          git commit -m "docs: update CHANGELOG.md for ${{ github.ref_name }} [skip ci]"
+          git push origin HEAD:main
 
-          if [ -n "$PREVIOUS_TAG" ]; then
-            COMMITS=$(git log "${PREVIOUS_TAG}..${CURRENT_TAG}" \
-              --pretty=format:"- %s (%h)" --no-merges)
-          else
-            COMMITS=$(git log "${CURRENT_TAG}" \
-              --pretty=format:"- %s (%h)" --no-merges | head -30)
-          fi
-
-          # Write multi-line output safely using the GitHub Actions delimiter syntax.
-          {
-            echo "body<<EOF"
-            echo "## What's changed"
-            echo ""
-            if [ -n "$PREVIOUS_TAG" ]; then
-              echo "Changes since \`${PREVIOUS_TAG}\`:"
-            else
-              echo "Initial release:"
-            fi
-            echo ""
-            echo "$COMMITS"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-
-      # Create (or update) the GitHub Release for this tag.
-      # electron-builder's --publish always already uploaded the platform
-      # artifacts to a draft release; this step marks it as non-draft and
-      # sets the title + description.
+      # Publish the GitHub Release.
+      # electron-builder's --publish always already uploaded platform
+      # artifacts as draft; this step finalises the release.
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: "MyFTB Launcher ${{ github.ref_name }}"
-          body: ${{ steps.changelog.outputs.body }}
-          # Set draft: false to make the release publicly visible.
+          body_path: RELEASE_NOTES.md
           draft: false
-          # Mark as pre-release if the tag contains a pre-release identifier
-          # (e.g. v2.0.0-beta.1).
           prerelease: ${{ contains(github.ref_name, '-') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
