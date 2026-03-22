@@ -20,7 +20,7 @@ import { IpcChannels } from '../ipc/channels'
 import { Constants, fmt } from '../constants'
 import { configService } from './config.service'
 import { getMainWindow } from '../app-state'
-import { ensureRuntime } from './java.service'
+import { ensureRuntime, resolveJavaPath } from './java.service'
 import type {
   ModpackManifestReference,
   ModpackManifest,
@@ -94,15 +94,21 @@ function detectModLoader(manifest: ModpackManifest): {
   // ── 2. Version ID fallback (handles packs with no libraries array) ────────
   // Patterns: "{mcVersion}-forge-{forgeVersion}"  e.g. 1.20.1-forge-47.4.0
   //           "{mcVersion}-neoforge-{forgeVersion}" e.g. 1.20.1-neoforge-47.1.0
+  //           "neoforge-{forgeVersion}"             e.g. neoforge-21.1.219
   const idMatch = versionId.match(/^(\d+\.\d+(?:\.\d+)?)-(?:(neoforge)|(forge))-(.+)$/)
   if (idMatch) {
     const [, mcVersion, neoToken, , forgeVersion] = idMatch
     if (neoToken) {
-      // net.neoforged:neoforge:{forgeVersion}
       return { loader: 'neoforge', libraryName: `net.neoforged:neoforge:${forgeVersion}` }
     }
     // net.minecraftforge:forge:{mcVersion}-{forgeVersion} — modern format
     return { loader: 'forge', libraryName: `net.minecraftforge:forge:${mcVersion}-${forgeVersion}` }
+  }
+
+  // Short-form NeoForge ID with no MC-version prefix, e.g. "neoforge-21.1.219"
+  const neoShortMatch = versionId.match(/^neoforge-(.+)$/)
+  if (neoShortMatch) {
+    return { loader: 'neoforge', libraryName: `net.neoforged:neoforge:${neoShortMatch[1]}` }
   }
 
   // ── 3. Fabric / Quilt by ID prefix ────────────────────────────────────────
@@ -310,7 +316,28 @@ class InstallService {
 
     signal.throwIfAborted()
 
-    // ── d. Install mod loader ─────────────────────────────────────────────────
+    // ── d. Ensure JRE ────────────────────────────────────────────────────────
+    // Must happen before the mod-loader install so that Java is available when
+    // Forge / NeoForge post-processors run.
+    pushEvent(IpcChannels.INSTALL_PROGRESS, {
+      total: 0,
+      finished: 0,
+      failed: 0,
+      currentFile: 'Preparing Java runtime…',
+    } satisfies InstallProgressEvent)
+
+    await ensureRuntime(
+      manifest,
+      signal,
+      { total: 0, finished: 0, failed: 0 },
+      (p) => pushEvent(IpcChannels.INSTALL_PROGRESS, p satisfies InstallProgressEvent),
+    )
+
+    signal.throwIfAborted()
+
+    const javaPath = await resolveJavaPath(manifest)
+
+    // ── e. Install mod loader ─────────────────────────────────────────────────
     if (loader === 'forge' && libraryName) {
       const forgeEntry = buildForgeEntry(manifest.gameVersion, libraryName)
 
@@ -321,7 +348,7 @@ class InstallService {
         currentFile: `Installing Forge ${forgeEntry.version}…`,
       } satisfies InstallProgressEvent)
 
-      await installForge(forgeEntry, minecraftDir)
+      await installForge(forgeEntry, minecraftDir, { java: javaPath })
 
       signal.throwIfAborted()
     } else if (loader === 'neoforge' && libraryName) {
@@ -334,7 +361,21 @@ class InstallService {
         currentFile: `Installing NeoForge ${neoforgeVersion}…`,
       } satisfies InstallProgressEvent)
 
-      await installNeoForged('neoforge', neoforgeVersion, minecraftDir, {})
+      await installNeoForged('neoforge', neoforgeVersion, minecraftDir, { java: javaPath })
+
+      // installNeoForged creates the version JSON under the installer's own ID
+      // (e.g. '1.21.1-neoforge-21.1.219'), but manifest.versionManifest.id may
+      // use the short form (e.g. 'neoforge-21.1.219').  Write the pack's
+      // versionManifest under its own ID so Version.parse and the launch service
+      // can find it — same pattern as the Fabric handler below.
+      const neoVersionId = manifest.versionManifest.id
+      const neoVersionDir = path.join(minecraftDir, 'versions', neoVersionId)
+      const neoVersionJsonPath = path.join(neoVersionDir, `${neoVersionId}.json`)
+      const neoVersionJsonExists = await fs.access(neoVersionJsonPath).then(() => true).catch(() => false)
+      if (!neoVersionJsonExists) {
+        await fs.mkdir(neoVersionDir, { recursive: true })
+        await fs.writeFile(neoVersionJsonPath, JSON.stringify(manifest.versionManifest), 'utf8')
+      }
 
       signal.throwIfAborted()
     } else if (loader === 'fabric' || loader === 'quilt') {
@@ -374,7 +415,7 @@ class InstallService {
       signal.throwIfAborted()
     }
 
-    // ── e. Install libraries + assets for the resolved version ────────────────
+    // ── f. Install libraries + assets for the resolved version ────────────────
     // This covers Fabric/Quilt loader JARs and any libraries not yet on disk.
     // Forge/NeoForge handle their own libraries, but this is safe to run for all.
     pushEvent(IpcChannels.INSTALL_PROGRESS, {
@@ -504,14 +545,6 @@ class InstallService {
     await fs.writeFile(manifestFilePath, JSON.stringify(manifest, null, 2), 'utf8')
 
     signal.throwIfAborted()
-
-    // ── g. Custom JRE ─────────────────────────────────────────────────────────
-    ;({ total, finished, failed } = await ensureRuntime(
-      manifest,
-      signal,
-      { total, finished, failed },
-      (p) => pushEvent(IpcChannels.INSTALL_PROGRESS, p satisfies InstallProgressEvent),
-    ))
 
     // ── Complete ──────────────────────────────────────────────────────────────
     const success = failed === 0
