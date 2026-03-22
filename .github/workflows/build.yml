@@ -20,6 +20,10 @@ concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: true
 
+# Opt into Node.js 24 for action runners (becomes default June 2026)
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
     name: Build (${{ matrix.os }})
@@ -84,3 +88,4 @@ jobs:
           # platforms even when publish is disabled — provide a placeholder so
           # the build doesn't fail with a "missing token" error.
           GH_TOKEN: ${{ github.token }}
+

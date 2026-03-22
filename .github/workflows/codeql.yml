@@ -18,6 +18,10 @@ on:
     # Weekly scan every Monday at 07:00 UTC
     - cron: "0 7 * * 1"
 
+# Opt into Node.js 24 for action runners (becomes default June 2026)
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   analyze:
     name: Analyze (TypeScript)
@@ -55,3 +59,4 @@ jobs:
         uses: github/codeql-action/analyze@v3
         with:
           category: "/language:javascript-typescript"
+

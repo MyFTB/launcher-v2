@@ -38,6 +38,10 @@ concurrency:
 # The tag name (e.g. "v2.0.0") is derived from github.ref_name and used as
 # the release title / artifact directory.
 
+# Opt into Node.js 24 for action runners (becomes default June 2026)
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   # ============================================================================
   # Platform build jobs — run in parallel
@@ -215,3 +219,4 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
+
