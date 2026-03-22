@@ -115,7 +115,9 @@ export function javaHomeMatchesRequired(javaHome: string, required: 8 | 17 | 21)
   if (required === 8) {
     return /(^|[-_.])8([-._]|$)|\bjre?8\b|\bjdk8\b/.test(dir)
   }
-  return new RegExp(`\\b${required}\\b`).test(dir)
+  // Use a static pattern per version to avoid dynamic RegExp construction
+  const VERSION_PATTERNS: Record<17 | 21, RegExp> = { 17: /\b17\b/, 21: /\b21\b/ }
+  return VERSION_PATTERNS[required].test(dir)
 }
 
 // ─── System Java discovery ────────────────────────────────────────────────────

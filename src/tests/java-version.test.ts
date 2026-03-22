@@ -127,9 +127,12 @@ describe('javaHomeMatchesRequired', () => {
     ).toBe(false)
   })
 
-  it('rejects Java 8 path when Java 17 is required', () => {
-    expect(
-      javaHomeMatchesRequired('C:\\Program Files\\Zulu\\zulu-8.44.0.11', 17),
-    ).toBe(false)
+  // Cross-version rejections (ensures static lookup doesn't match wrong version)
+  it('rejects Java 21 path when Java 17 is required', () => {
+    expect(javaHomeMatchesRequired('/usr/lib/jvm/java-21-openjdk-amd64', 17)).toBe(false)
+  })
+
+  it('rejects Java 17 path when Java 21 is required', () => {
+    expect(javaHomeMatchesRequired('/usr/lib/jvm/java-17-openjdk-amd64', 21)).toBe(false)
   })
 })

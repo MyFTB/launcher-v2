@@ -53,8 +53,9 @@ async function fetchOgMeta(url: string): Promise<{ image?: string; excerpt?: str
     const response = await fetchWithTimeout(url)
     const html = await response.text()
     const meta = (prop: string): string | undefined => {
-      const m = html.match(new RegExp(`<meta[^>]+property="${prop}"[^>]+content="([^"]+)"`))
-               ?? html.match(new RegExp(`<meta[^>]+content="([^"]+)"[^>]+property="${prop}"`))
+      const escaped = prop.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      const m = html.match(new RegExp(`<meta[^>]+property="${escaped}"[^>]+content="([^"]+)"`))
+               ?? html.match(new RegExp(`<meta[^>]+content="([^"]+)"[^>]+property="${escaped}"`))
       return m?.[1]
     }
     return {

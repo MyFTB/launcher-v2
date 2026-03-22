@@ -502,13 +502,15 @@ class LaunchService {
             }
           }
 
+          // Strip newlines so pack name cannot inject extra .desktop file entries
+          const safePackName = packName.replace(/[\n\r]/g, ' ').trim()
           const desktopEntry = [
             '[Desktop Entry]',
             'Type=Application',
             'Version=1.0',
-            `Name=MyFTB – ${packName}`,
-            `Comment=Launch the MyFTB modpack "${packName}"`,
-            `Exec=${executablePath} --pack "${packName}"`,
+            `Name=MyFTB – ${safePackName}`,
+            `Comment=Launch the MyFTB modpack "${safePackName}"`,
+            `Exec=${executablePath} --pack "${safePackName}"`,
             iconLine,
             'Terminal=false',
             'Categories=Game;',

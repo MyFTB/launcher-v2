@@ -62,8 +62,9 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(IpcChannels.SYSTEM_OPEN_URL, async (_e, { url }: { url: string }) => {
     const trusted = ['myftb.de', 'minecraft.net', 'microsoft.com', 'live.com']
     try {
-      const host = new URL(url).hostname
-      if (trusted.some((d) => host === d || host.endsWith('.' + d))) {
+      const { hostname, protocol } = new URL(url)
+      const isSafeProtocol = protocol === 'https:' || protocol === 'http:'
+      if (isSafeProtocol && trusted.some((d) => hostname === d || hostname.endsWith('.' + d))) {
         await shell.openExternal(url)
       }
     } catch {

@@ -37,6 +37,16 @@ type ModLoader = 'forge' | 'neoforge' | 'fabric' | 'quilt' | 'vanilla'
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /**
+ * Returns true when `filePath` resolves to a location strictly inside `baseDir`.
+ * Exported for unit testing; used to guard against path traversal in manifest tasks.
+ */
+export function isPathWithinDir(baseDir: string, filePath: string): boolean {
+  const resolvedBase = path.resolve(baseDir)
+  const resolvedTarget = path.resolve(baseDir, filePath)
+  return resolvedTarget.startsWith(resolvedBase + path.sep)
+}
+
+/**
  * Evaluate a FileTask `when` condition against the currently selected features.
  * Returns `true` when the file should be downloaded.
  */
@@ -468,7 +478,11 @@ class InstallService {
           ? task.location
           : fmt(Constants.launcherObjects, task.location)
 
-        const targetPath = path.join(instanceDir, task.to)
+        const targetPath = path.resolve(instanceDir, task.to)
+
+        if (!isPathWithinDir(instanceDir, task.to)) {
+          throw new Error(`Pack manifest contains unsafe file path: ${task.to}`)
+        }
 
         // Skip user files that already exist on disk
         if (task.userFile) {
