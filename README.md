@@ -6,7 +6,7 @@
   [![Build](https://github.com/MyFTB/launcher-v2/actions/workflows/build.yml/badge.svg)](https://github.com/MyFTB/launcher-v2/actions/workflows/build.yml)
   [![Release](https://img.shields.io/github/v/release/MyFTB/launcher-v2?include_prereleases)](https://github.com/MyFTB/launcher-v2/releases/latest)
   [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
-  [![Discord](https://img.shields.io/discord/myftb?label=Discord&logo=discord&logoColor=white)](https://discord.gg/myftb)
+  [![Discord](https://img.shields.io/discord/190163175633584130?label=Discord&logo=discord&logoColor=white)](https://discord.gg/myftb)
 </div>
 
 ---
