@@ -1,6 +1,4 @@
-// discord-rpc is CJS — use createRequire to avoid ESM/CJS interop issues
-import { createRequire } from 'node:module'
-const { Client } = createRequire(import.meta.url)('discord-rpc') as typeof import('discord-rpc')
+import { Client } from '@xhayper/discord-rpc'
 
 import { Constants } from '../constants'
 
@@ -13,7 +11,7 @@ type PresenceState =
 // ─── Service ─────────────────────────────────────────────────────────────────
 
 class DiscordService {
-  private client: InstanceType<typeof Client> | null = null
+  private client: Client | null = null
   private ready = false
   private currentState: PresenceState = { kind: 'idle' }
 
@@ -74,7 +72,7 @@ class DiscordService {
     // Tear down any previous client before creating a new one.
     this.teardown()
 
-    const client = new Client({ transport: 'ipc' })
+    const client = new Client({ clientId: Constants.discordAppId, transport: 'ipc' })
     this.client = client
 
     client.on('ready', () => {
@@ -85,7 +83,7 @@ class DiscordService {
     })
 
     // discord-rpc emits 'disconnected' when the pipe closes mid-session.
-    client.on('disconnected' as Parameters<typeof client.on>[0], () => {
+    client.on('disconnected', () => {
       console.warn('[DiscordService] Disconnected from Discord; will attempt to reconnect.')
       this.ready = false
       this.stopUpdateLoop()
@@ -94,7 +92,7 @@ class DiscordService {
     })
 
     client
-      .login({ clientId: Constants.discordAppId })
+      .login()
       .catch((err: unknown) => {
         // Discord is likely not running — this is not a fatal error.
         console.warn('[DiscordService] Could not connect to Discord:', err)
@@ -128,7 +126,8 @@ class DiscordService {
 
     if (state.kind === 'idle') {
       this.client
-        .setActivity({
+        .user
+        ?.setActivity({
           details: 'Im Launcher',
           largeImageKey: 'myftb',
         })
@@ -137,7 +136,8 @@ class DiscordService {
         })
     } else {
       this.client
-        .setActivity({
+        .user
+        ?.setActivity({
           details: 'Spielt ' + state.packTitle,
           largeImageKey: 'myftb',
           startTimestamp: state.startTimestamp,
