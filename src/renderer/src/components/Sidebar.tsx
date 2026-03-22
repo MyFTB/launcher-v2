@@ -89,7 +89,7 @@ export default function Sidebar() {
             <span className="flex-1 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200 whitespace-nowrap pr-4">
               {label}
               {badge > 0 && (
-                <span className="px-1.5 py-0.5 rounded-full text-xs font-bold bg-accent text-white leading-none">
+                <span className="px-1.5 py-0.5 rounded-full text-xs font-bold bg-accent text-black leading-none">
                   {badge}
                 </span>
               )}
@@ -106,7 +106,7 @@ export default function Sidebar() {
           className={({ isActive }) =>
             `flex items-center py-3 text-sm transition-colors duration-150 no-drag ${
               isActive
-                ? 'text-accent bg-accent/10'
+                ? 'text-accent bg-accent/10 border-r-2 border-accent'
                 : 'text-text-secondary hover:text-text-primary hover:bg-bg-elevated'
             }`
           }

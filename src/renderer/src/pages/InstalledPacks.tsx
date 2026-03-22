@@ -215,7 +215,13 @@ export default function InstalledPacks() {
         </div>
       ) : packs.length === 0 ? (
         <div className="card px-6 py-16 text-center">
-          <p className="text-text-secondary text-sm">Keine Modpacks installiert.</p>
+          <div className="w-12 h-12 rounded-xl bg-bg-elevated flex items-center justify-center mx-auto mb-3">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="w-6 h-6 text-text-muted">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+            </svg>
+          </div>
+          <p className="text-sm font-medium text-text-secondary">Noch keine Modpacks installiert.</p>
+          <p className="text-xs text-text-muted mt-1">Entdecke verfügbare Modpacks und installiere dein erstes.</p>
           <button
             className="btn-primary mt-4"
             onClick={() => navigate('/available')}
@@ -225,9 +231,9 @@ export default function InstalledPacks() {
         </div>
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-4">
-          {packs.map((pack) => (
+          {packs.map((pack, i) => (
+            <div key={pack.name} className="animate-slide-up" style={{ animationDelay: `${Math.min(i, 8) * 40}ms`, animationFillMode: 'backwards' }}>
             <ModpackCard
-              key={pack.name}
               manifest={pack}
               isInstalled={true}
               isRunning={runningPack === pack.name}
@@ -235,6 +241,7 @@ export default function InstalledPacks() {
               onPlay={() => handlePlay(pack.name)}
               onContextMenu={(e) => handleContextMenu(e, pack.name)}
             />
+            </div>
           ))}
         </div>
       )}

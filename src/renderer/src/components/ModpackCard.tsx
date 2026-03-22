@@ -38,7 +38,6 @@ export default function ModpackCard({
   onContextMenu,
 }: ModpackCardProps) {
   const [logoUrl, setLogoUrl] = useState<string | null>(null)
-  const [hovered, setHovered] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -57,9 +56,7 @@ export default function ModpackCard({
 
   return (
     <div
-      className="card relative flex flex-col overflow-hidden group cursor-pointer transition-all duration-200 hover:border-border-focus hover:shadow-[0_4px_24px_rgba(131,218,56,0.12)]"
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
+      className="card relative flex flex-col overflow-hidden group cursor-pointer transition-all duration-200 hover:border-border-focus hover:shadow-[0_4px_24px_rgba(131,218,56,0.2)]"
       onContextMenu={onContextMenu}
     >
       {/* Logo area */}
@@ -102,9 +99,7 @@ export default function ModpackCard({
 
         {/* Hover action overlay */}
         <div
-          className={`absolute inset-0 flex items-center justify-center bg-black/50 backdrop-blur-[2px] transition-opacity duration-200 ${
-            hovered ? 'opacity-100' : 'opacity-0'
-          }`}
+          className="absolute inset-0 flex items-center justify-center bg-black/50 backdrop-blur-[2px] transition-opacity duration-200 opacity-0 group-hover:opacity-100"
         >
           {isInstalled ? (
             <button
@@ -159,7 +154,7 @@ export default function ModpackCard({
           )}
         </div>
 
-        <span className="text-xs text-text-muted">v{manifest.version}</span>
+        <span className="text-xs text-text-muted tabular-nums">v{manifest.version}</span>
       </div>
     </div>
   )

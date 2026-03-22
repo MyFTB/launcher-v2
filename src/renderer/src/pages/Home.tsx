@@ -209,7 +209,7 @@ export default function Home() {
 
       {/* Recently played */}
       <section className="mb-8">
-        <h2 className="text-xs font-medium text-text-muted tracking-wide mb-3">
+        <h2 className="text-xs font-semibold text-text-muted uppercase tracking-widest mb-3">
           Zuletzt gespielt
         </h2>
         {loading ? (
@@ -255,7 +255,7 @@ export default function Home() {
 
       {/* Community links */}
       <section>
-        <h2 className="text-xs font-medium text-text-muted tracking-wide mb-3">
+        <h2 className="text-xs font-semibold text-text-muted uppercase tracking-widest mb-3">
           Community
         </h2>
         <div className="grid grid-cols-2 gap-3">

@@ -44,16 +44,13 @@
   }
   @keyframes progressBar {
     0% {
-      margin-left: 0%;
-      width: 40%;
+      transform: translateX(0%);
     }
     50% {
-      margin-left: 60%;
-      width: 40%;
+      transform: translateX(150%);
     }
     100% {
-      margin-left: 0%;
-      width: 40%;
+      transform: translateX(0%);
     }
   }
 }

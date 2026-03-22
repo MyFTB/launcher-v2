@@ -74,8 +74,8 @@ export default function ProgressModal({ progress, packTitle, result, onCancel, o
         {isPreparing ? (
           /* Indeterminate phase — Minecraft/Forge install, version fetching, etc. */
           <div className="mb-5">
-            <div className="w-full h-2 bg-bg-elevated rounded-full overflow-hidden mb-3">
-              <div className="h-full bg-accent rounded-full animate-[progressBar_1.5s_ease-in-out_infinite]" style={{ width: '40%' }} />
+            <div className="relative w-full h-2 bg-bg-elevated rounded-full overflow-hidden mb-3">
+              <div className="absolute h-full w-2/5 bg-accent rounded-full animate-[progressBar_1.5s_ease-in-out_infinite]" />
             </div>
             <p className="text-sm text-text-secondary truncate">
               {truncatedFile || 'Vorbereitung…'}

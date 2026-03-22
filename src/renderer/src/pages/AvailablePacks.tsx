@@ -202,7 +202,7 @@ export default function AvailablePacks() {
 
       {/* Search bar */}
       <div className="mb-6">
-        <div className="relative max-w-sm">
+        <div className="relative max-w-md">
           <svg
             viewBox="0 0 24 24"
             fill="none"
@@ -262,15 +262,16 @@ export default function AvailablePacks() {
         </div>
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-4">
-          {filteredPacks.map((pack) => (
+          {filteredPacks.map((pack, i) => (
+            <div key={pack.name} className="animate-slide-up" style={{ animationDelay: `${Math.min(i, 8) * 40}ms`, animationFillMode: 'backwards' }}>
             <ModpackCard
-              key={pack.name}
               manifest={pack}
               isInstalled={false}
               isRunning={false}
               isNew={newPackNames.has(pack.name)}
               onInstall={() => handleInstall(pack)}
             />
+            </div>
           ))}
         </div>
       )}
