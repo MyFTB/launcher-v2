@@ -9,6 +9,7 @@ import { modpackApiService } from '../services/modpack-api.service'
 import { installService } from '../services/install.service'
 import { launchService } from '../services/launch.service'
 import { discordService } from '../services/discord.service'
+import { updateService } from '../services/update.service'
 import { getMainWindow, getLaunchPackArg } from '../app-state'
 
 export function registerIpcHandlers(): void {
@@ -112,4 +113,5 @@ export function registerIpcHandlers(): void {
   installService.registerHandlers()
   launchService.registerHandlers()
   discordService.init()
+  updateService.registerHandlers()
 }

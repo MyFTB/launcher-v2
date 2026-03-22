@@ -193,6 +193,21 @@ export interface SystemInfoResult {
 // Paste / crash
 export interface UploadLogResult { url: string }
 
+// Updates
+export interface UpdateAvailableEvent {
+  version: string
+  releaseNotes: string | null
+  releaseDate: string
+}
+export interface UpdateProgressEvent {
+  percent: number
+  bytesPerSecond: number
+  transferred: number
+  total: number
+}
+export interface UpdateDownloadedEvent { version: string }
+export interface UpdateErrorEvent { message: string }
+
 // Posts (myftb.de blog)
 export interface Post {
   title: string
@@ -250,6 +265,11 @@ export interface ElectronAPI {
   windowMaximize(): void
   windowClose(): void
   windowOpenConsole(): Promise<void>
+
+  // Updates
+  updateCheck(): Promise<void>
+  updateDownload(): Promise<void>
+  updateInstall(): void
 
   // Push event listeners (renderer side)
   on(channel: string, listener: (...args: unknown[]) => void): () => void

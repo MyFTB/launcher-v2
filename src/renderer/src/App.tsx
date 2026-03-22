@@ -2,6 +2,7 @@ import { Routes, Route, Navigate } from 'react-router-dom'
 import { useEffect, useRef, useState } from 'react'
 import Sidebar from './components/Sidebar'
 import TitleBar from './components/TitleBar'
+import UpdateBanner from './components/UpdateBanner'
 import Home from './pages/Home'
 import AvailablePacks from './pages/AvailablePacks'
 import InstalledPacks from './pages/InstalledPacks'
@@ -111,6 +112,7 @@ export default function App() {
   return (
     <div className="flex flex-col h-full bg-bg-base text-text-primary overflow-hidden">
       <TitleBar />
+      <UpdateBanner />
 
       <div className="flex flex-1 overflow-hidden">
         <Sidebar />

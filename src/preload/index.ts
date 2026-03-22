@@ -47,6 +47,11 @@ const api: ElectronAPI = {
   systemInfo: () => ipcRenderer.invoke('system:info'),
   systemOpenUrl: (url) => ipcRenderer.invoke('system:open-url', { url }),
 
+  // ── Updates ───────────────────────────────────────────────────
+  updateCheck: () => ipcRenderer.invoke('update:check'),
+  updateDownload: () => ipcRenderer.invoke('update:download'),
+  updateInstall: () => ipcRenderer.send('update:install'),
+
   // ── Window controls ───────────────────────────────────────
   windowMinimize: () => ipcRenderer.send('window:minimize'),
   windowMaximize: () => ipcRenderer.send('window:maximize'),

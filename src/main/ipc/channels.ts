@@ -90,6 +90,23 @@ export const IpcChannels = {
   WELCOME_MESSAGE: 'internal:welcome-message',
   /** Main→Renderer push: Auto-launch pack from --pack CLI arg or webstart */
   LAUNCH_PACK: 'internal:launch-pack',
+  // ── Updates ──────────────────────────────────────────────────
+  /** Renderer→Main: Manually trigger an update check */
+  UPDATE_CHECK: 'update:check',
+  /** Renderer→Main: Start downloading the available update */
+  UPDATE_DOWNLOAD: 'update:download',
+  /** Renderer→Main: Quit app and install the downloaded update */
+  UPDATE_INSTALL: 'update:install',
+  /** Main→Renderer push: update is available */
+  UPDATE_AVAILABLE: 'update:available',
+  /** Main→Renderer push: no update available */
+  UPDATE_NOT_AVAILABLE: 'update:not-available',
+  /** Main→Renderer push: download progress */
+  UPDATE_PROGRESS: 'update:progress',
+  /** Main→Renderer push: update downloaded, ready to install */
+  UPDATE_DOWNLOADED: 'update:downloaded',
+  /** Main→Renderer push: updater error */
+  UPDATE_ERROR: 'update:error',
 } as const
 
 export type IpcChannelName = (typeof IpcChannels)[keyof typeof IpcChannels]
