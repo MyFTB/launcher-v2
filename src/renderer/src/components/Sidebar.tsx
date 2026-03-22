@@ -1,6 +1,7 @@
 import { NavLink } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import { getStoredNewPacks } from '../utils/packBadge'
+import logoUrl from '../assets/logo.svg'
 
 /** Icons as SVG strings — replace with lucide-react or heroicons once added */
 const HomeIcon = () => (
@@ -56,9 +57,7 @@ export default function Sidebar() {
       {/* Logo */}
       <div className="flex items-center py-4 border-b border-border">
         <div className="w-14 flex justify-center flex-shrink-0">
-          <div className="w-7 h-7 rounded-lg bg-accent flex items-center justify-center">
-            <span className="text-xs font-black text-black leading-none select-none">M</span>
-          </div>
+          <img src={logoUrl} alt="MyFTB" className="w-8 h-8" draggable={false} />
         </div>
         <span className="text-sm font-bold text-text-primary opacity-0 group-hover:opacity-100 transition-opacity duration-200 whitespace-nowrap">
           MyFTB
