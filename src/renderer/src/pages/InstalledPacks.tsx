@@ -176,15 +176,6 @@ export default function InstalledPacks() {
             </svg>
             {reloading ? 'Laden...' : 'Aktualisieren'}
           </button>
-          <button
-            className="btn-ghost text-xs"
-            onClick={() => window.dispatchEvent(new CustomEvent('open-console'))}
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-4 h-4">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-            </svg>
-            Konsole
-          </button>
         </div>
       </div>
 

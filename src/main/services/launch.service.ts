@@ -340,6 +340,19 @@ class LaunchService {
         this.childProcess = child
         this.logBuffer.clear()
 
+        // ── Emit running state & record last-played ───────────────────────────
+        sendState({ state: 'running' })
+        const prevConfig = configService.get()
+        configService.merge({
+          lastPlayedPacks: [
+            packName,
+            ...prevConfig.lastPlayedPacks.filter((n) => n !== packName),
+          ].slice(0, 10),
+        })
+        configService.save().catch((err) => {
+          console.error('[LaunchService] Failed to save lastPlayedPacks:', err)
+        })
+
         // Discord presence
         try {
           getDiscordService()?.setRunningModpack(manifest)

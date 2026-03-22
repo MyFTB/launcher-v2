@@ -1,5 +1,6 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { useEffect, useRef, useState } from 'react'
+import type { LaunchState } from '@shared/types'
 import Sidebar from './components/Sidebar'
 import TitleBar from './components/TitleBar'
 import UpdateBanner from './components/UpdateBanner'
@@ -46,8 +47,10 @@ const MAX_DRAWER_RATIO = 0.85
 export default function App() {
   const [consoleOpen, setConsoleOpen] = useState(false)
   const [drawerHeight, setDrawerHeight] = useState(300)
+  const [isDragging, setIsDragging] = useState(false)
+  const [isGameActive, setIsGameActive] = useState(false)
   const drawerRef = useRef<HTMLDivElement>(null)
-  const dragRef = useRef<{ startY: number; startH: number; currentH: number } | null>(null)
+  const dragRef = useRef<{ startY: number; startH: number } | null>(null)
 
   useEffect(() => {
     window.electronAPI.configGet().catch(console.error)
@@ -79,22 +82,27 @@ export default function App() {
     return () => window.removeEventListener('open-console', handler)
   }, [])
 
-  // Resize drag logic — DOM-direct during drag, state sync on mouse-up
+  // Track running game for FAB indicator
+  useEffect(() => {
+    const unsub = window.electronAPI.on('launch:state', (...args: unknown[]) => {
+      const event = args[0] as { state: LaunchState }
+      setIsGameActive(event.state === 'launching' || event.state === 'running')
+    })
+    return unsub
+  }, [])
+
+  // Resize drag logic — state-driven so React re-renders never snap back to stale height
   useEffect(() => {
     const onMouseMove = (e: MouseEvent): void => {
-      if (!dragRef.current || !drawerRef.current) return
+      if (!dragRef.current) return
       const delta = dragRef.current.startY - e.clientY
       const max = window.innerHeight * MAX_DRAWER_RATIO
-      const newH = Math.max(MIN_DRAWER_HEIGHT, Math.min(max, dragRef.current.startH + delta))
-      dragRef.current.currentH = newH
-      drawerRef.current.style.height = `${newH}px`
+      const newH = Math.round(Math.max(MIN_DRAWER_HEIGHT, Math.min(max, dragRef.current.startH + delta)))
+      setDrawerHeight(newH)
     }
     const onMouseUp = (): void => {
-      if (dragRef.current) {
-        setDrawerHeight(Math.round(dragRef.current.currentH))
-        if (drawerRef.current) drawerRef.current.style.transition = ''
-      }
       dragRef.current = null
+      setIsDragging(false)
     }
     window.addEventListener('mousemove', onMouseMove)
     window.addEventListener('mouseup', onMouseUp)
@@ -136,26 +144,19 @@ export default function App() {
             className="absolute inset-x-0 bottom-0 flex flex-col bg-bg-surface border-t border-border shadow-2xl overflow-hidden"
             style={{
               height: consoleOpen ? drawerHeight : 0,
-              transition: 'height 300ms ease-in-out',
+              transition: isDragging ? 'none' : 'height 300ms ease-in-out',
             }}
           >
             {/* Resize handle */}
             <div
-              className="flex items-center justify-between px-3 h-6 bg-bg-elevated border-b border-border flex-shrink-0 cursor-ns-resize select-none group"
+              className="flex items-center justify-end px-3 h-6 bg-bg-elevated border-b border-border flex-shrink-0 cursor-ns-resize select-none"
               onMouseDown={(e) => {
                 if (!drawerRef.current) return
-                drawerRef.current.style.transition = 'none'
-                dragRef.current = { startY: e.clientY, startH: drawerHeight, currentH: drawerHeight }
+                dragRef.current = { startY: e.clientY, startH: drawerHeight }
+                setIsDragging(true)
                 e.preventDefault()
               }}
             >
-              {/* Drag grip indicator */}
-              <div className="flex gap-0.5 opacity-40 group-hover:opacity-70 transition-opacity">
-                {[...Array(5)].map((_, i) => (
-                  <div key={i} className="w-4 h-px bg-text-muted" />
-                ))}
-              </div>
-
               <div className="flex items-center gap-1">
                 {/* Detach button */}
                 <button
@@ -178,21 +179,22 @@ export default function App() {
               </div>
             </div>
 
-            {consoleOpen && <Console />}
+            <Console />
           </div>
 
-          {/* Floating console toggle button */}
-          <button
-            onClick={() => setConsoleOpen((o) => !o)}
-            className={`absolute bottom-4 right-4 w-11 h-11 rounded-full flex items-center justify-center shadow-lg transition-all duration-200 no-drag z-10 ${
-              consoleOpen
-                ? 'bg-accent text-bg-base hover:bg-accent-dim'
-                : 'bg-bg-overlay text-text-secondary hover:bg-bg-elevated hover:text-text-primary border border-border'
-            }`}
-            title={consoleOpen ? 'Konsole schließen' : 'Konsole öffnen'}
-          >
-            {consoleOpen ? <ChevronDownIcon /> : <TerminalIcon />}
-          </button>
+          {/* Floating console toggle button — hidden when drawer is open */}
+          {!consoleOpen && (
+            <button
+              onClick={() => setConsoleOpen(true)}
+              className="absolute bottom-4 right-4 w-11 h-11 rounded-full flex items-center justify-center shadow-lg transition-all duration-200 no-drag z-10 bg-bg-overlay text-text-secondary hover:bg-bg-elevated hover:text-text-primary border border-border"
+              title="Konsole öffnen"
+            >
+              <TerminalIcon />
+              {isGameActive && (
+                <span className="absolute top-0.5 right-0.5 w-2.5 h-2.5 rounded-full bg-accent border-2 border-bg-base animate-pulse" />
+              )}
+            </button>
+          )}
         </main>
       </div>
     </div>
