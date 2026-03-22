@@ -379,10 +379,13 @@ class InstallService {
       const neoVersionId = manifest.versionManifest.id
       const neoVersionDir = path.join(minecraftDir, 'versions', neoVersionId)
       const neoVersionJsonPath = path.join(neoVersionDir, `${neoVersionId}.json`)
-      const neoVersionJsonExists = await fs.access(neoVersionJsonPath).then(() => true).catch(() => false)
-      if (!neoVersionJsonExists) {
-        await fs.mkdir(neoVersionDir, { recursive: true })
-        await fs.writeFile(neoVersionJsonPath, JSON.stringify(manifest.versionManifest), 'utf8')
+      await fs.mkdir(neoVersionDir, { recursive: true })
+      try {
+        // CodeQL[js/network-data-written-to-file]: versionManifest from trusted packs.myftb.de, intentionally written to Minecraft dir
+        await fs.writeFile(neoVersionJsonPath, JSON.stringify(manifest.versionManifest), { encoding: 'utf8', flag: 'wx' })
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
+        // File already exists — keep it
       }
 
       signal.throwIfAborted()
@@ -414,10 +417,13 @@ class InstallService {
       // Write the versionManifest under its original ID so the launch service can find it by that name.
       const versionDir = path.join(minecraftDir, 'versions', versionId)
       const versionJsonPath = path.join(versionDir, `${versionId}.json`)
-      const versionJsonExists = await fs.access(versionJsonPath).then(() => true).catch(() => false)
-      if (!versionJsonExists) {
-        await fs.mkdir(versionDir, { recursive: true })
-        await fs.writeFile(versionJsonPath, JSON.stringify(manifest.versionManifest), 'utf8')
+      await fs.mkdir(versionDir, { recursive: true })
+      try {
+        // CodeQL[js/network-data-written-to-file]: versionManifest from trusted packs.myftb.de, intentionally written to Minecraft dir
+        await fs.writeFile(versionJsonPath, JSON.stringify(manifest.versionManifest), { encoding: 'utf8', flag: 'wx' })
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
+        // File already exists — keep it
       }
 
       signal.throwIfAborted()
@@ -554,6 +560,7 @@ class InstallService {
     }
 
     // ── f. Save manifest ──────────────────────────────────────────────────────
+    // CodeQL[js/network-data-written-to-file]: pack manifest from trusted packs.myftb.de, intentionally persisted to track installed state
     await fs.writeFile(manifestFilePath, JSON.stringify(manifest, null, 2), 'utf8')
 
     signal.throwIfAborted()

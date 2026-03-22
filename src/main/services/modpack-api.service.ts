@@ -201,16 +201,21 @@ class ModpackApiService {
         const cachePath = path.join(cacheDir, `${cacheKey}.png`)
 
         // Check for a valid cached file (within TTL).
+        // Open a single file handle for both stat and read to avoid a TOCTOU race.
+        let fh: Awaited<ReturnType<typeof fs.open>> | undefined
         try {
-          const stat = await fs.stat(cachePath)
+          fh = await fs.open(cachePath, 'r')
+          const stat = await fh.stat()
           const ageMs = Date.now() - stat.mtimeMs
           if (ageMs < Constants.imageCacheTtlMs) {
-            const buffer = await fs.readFile(cachePath)
+            const buffer = await fh.readFile()
             return `data:image/png;base64,${buffer.toString('base64')}`
           }
           // Cache is stale — fall through to re-fetch.
         } catch {
           // File does not exist yet — fall through to fetch.
+        } finally {
+          await fh?.close()
         }
 
         // Fetch from remote.
@@ -218,6 +223,7 @@ class ModpackApiService {
           const response = await fetchWithTimeout(imageUrl)
           const arrayBuffer = await response.arrayBuffer()
           const buffer = Buffer.from(arrayBuffer)
+          // CodeQL[js/network-data-written-to-file]: pack logo fetched from trusted packs.myftb.de, intentionally cached to disk
           await fs.writeFile(cachePath, buffer)
           return `data:image/png;base64,${buffer.toString('base64')}`
         } catch (err) {

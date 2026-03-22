@@ -115,6 +115,7 @@ async function uploadToPaste(text: string): Promise<string> {
   try {
     const response = await fetch(`${Constants.pasteTarget}/documents`, {
       method: 'POST',
+      // CodeQL[js/file-data-to-outbound-request]: user explicitly triggers log upload to paste.myftb.de for debugging
       body: Buffer.from(text, 'utf-8'),
       signal: controller.signal,
     })
