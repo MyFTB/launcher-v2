@@ -41,11 +41,10 @@ updates:
         patterns:
           - "@xmcl/*"
     open-pull-requests-limit: 10
-    # Ignore major bumps on packages with known migration cost
+    # Major version bumps require manual review — too much migration risk.
+    # Minor and patch are safe to auto-PR. Handle majors by hand when ready.
     ignore:
-      - dependency-name: "electron-vite"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "@vitejs/plugin-react"
+      - dependency-name: "*"
         update-types: ["version-update:semver-major"]
 
   # ── GitHub Actions ────────────────────────────────────────────────────────
