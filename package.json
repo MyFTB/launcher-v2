@@ -17,7 +17,7 @@
     "lint": "eslint src --report-unused-disable-directives --max-warnings 0"
   },
   "dependencies": {
-    "@sentry/electron": "^5.3.0",
+    "@sentry/electron": "^7.10.0",
     "@xmcl/core": "^2.15.1",
     "@xmcl/installer": "^6.1.2",
     "discord-rpc": "^4.0.1",
