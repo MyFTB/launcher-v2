@@ -17,18 +17,14 @@
     "lint": "eslint src --report-unused-disable-directives --max-warnings 0"
   },
   "dependencies": {
-    "@sentry/electron": "^7.10.0",
     "@xmcl/core": "^2.15.1",
     "@xmcl/installer": "^6.1.2",
-    "discord-rpc": "^4.0.1",
-    "electron-updater": "^6.1.7"
+    "discord-rpc": "^4.0.1"
   },
   "devDependencies": {
     "@electron-toolkit/tsconfig": "^2.0.0",
     "@electron-toolkit/utils": "^4.0.0",
     "@tailwindcss/vite": "^4.2.2",
-    "@testing-library/jest-dom": "^6.4.0",
-    "@testing-library/react": "^16.3.2",
     "@types/discord-rpc": "^4.0.8",
     "@types/node": "^25.5.0",
     "@types/react": "^19.2.14",
@@ -39,8 +35,6 @@
     "electron-vite": "^5.0.0",
     "eslint": "^10.1.0",
     "globals": "^17.4.0",
-    "jsdom": "^29.0.1",
-    "postcss": "^8.4.35",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "react-router-dom": "^7.13.1",
