@@ -256,7 +256,7 @@ export default function Settings() {
     <div className="animate-fade-in flex flex-col min-h-full">
       <div className="p-6 max-w-2xl mx-auto w-full flex-1">
       <div className="mb-6">
-        <h1 className="text-2xl font-bold text-text-primary">Einstellungen</h1>
+        <h1 className="text-2xl font-bold text-text-primary tracking-tight">Einstellungen</h1>
         <p className="text-text-secondary mt-1 text-sm">Konfiguriere den Launcher nach deinen Wünschen.</p>
       </div>
 
@@ -402,7 +402,7 @@ export default function Settings() {
         {/* Max Memory */}
         <div>
           <div className="flex items-center justify-between border-b border-border pb-2 mb-3">
-            <span className="text-xs font-semibold text-text-primary uppercase tracking-wide">
+            <span className="text-xs font-semibold text-text-primary">
               Arbeitsspeicher
             </span>
             {systemInfo && (
@@ -532,15 +532,15 @@ export default function Settings() {
       {/* System info */}
       <div className="card px-5 py-4 mb-6 flex justify-between">
         <div className="text-left">
-          <span className="text-xs text-text-muted uppercase tracking-wide">Launcher</span>
+          <span className="text-xs text-text-muted">Launcher</span>
           <p className="text-sm font-medium text-text-primary mt-0.5">{systemInfo?.launcherVersion ?? '—'}</p>
         </div>
         <div className="text-center">
-          <span className="text-xs text-text-muted uppercase tracking-wide">Plattform</span>
+          <span className="text-xs text-text-muted">Plattform</span>
           <p className="text-sm font-medium text-text-primary mt-0.5">{platformLabel}</p>
         </div>
         <div className="text-right">
-          <span className="text-xs text-text-muted uppercase tracking-wide">Architektur</span>
+          <span className="text-xs text-text-muted">Architektur</span>
           <p className="text-sm font-medium text-text-primary mt-0.5">{systemInfo?.arch ?? '—'}</p>
         </div>
       </div>

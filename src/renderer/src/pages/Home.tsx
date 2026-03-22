@@ -124,7 +124,7 @@ export default function Home() {
     <div className="p-6 max-w-3xl mx-auto animate-fade-in">
       {/* Welcome heading */}
       <div className="mb-8">
-        <h1 className="text-3xl font-bold text-text-primary flex items-center gap-2 flex-wrap">
+        <h1 className="text-4xl font-bold text-text-primary tracking-tight flex items-center gap-2 flex-wrap">
           Willkommen,{' '}
           <div className="relative" ref={pickerRef}>
             <button
@@ -209,7 +209,7 @@ export default function Home() {
 
       {/* Recently played */}
       <section className="mb-8">
-        <h2 className="text-xs font-semibold text-text-muted uppercase tracking-widest mb-3">
+        <h2 className="text-xs font-medium text-text-muted tracking-wide mb-3">
           Zuletzt gespielt
         </h2>
         {loading ? (
@@ -235,8 +235,14 @@ export default function Home() {
             ))}
           </div>
         ) : (
-          <div className="card px-6 py-8 text-center">
-            <p className="text-text-secondary text-sm">Noch keine Modpacks gespielt.</p>
+          <div className="card px-6 py-10 text-center">
+            <div className="w-12 h-12 rounded-xl bg-bg-elevated flex items-center justify-center mx-auto mb-3">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="w-6 h-6 text-text-muted">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+              </svg>
+            </div>
+            <p className="text-sm font-medium text-text-secondary">Noch keine Modpacks gespielt.</p>
+            <p className="text-xs text-text-muted mt-1">Installiere ein Modpack, um loszulegen.</p>
             <button
               className="btn-primary mt-4"
               onClick={() => navigate('/available')}
@@ -249,7 +255,7 @@ export default function Home() {
 
       {/* Community links */}
       <section>
-        <h2 className="text-xs font-semibold text-text-muted uppercase tracking-widest mb-3">
+        <h2 className="text-xs font-medium text-text-muted tracking-wide mb-3">
           Community
         </h2>
         <div className="grid grid-cols-2 gap-3">

@@ -56,7 +56,9 @@ export default function Sidebar() {
       {/* Logo */}
       <div className="flex items-center py-4 border-b border-border">
         <div className="w-14 flex justify-center flex-shrink-0">
-          <div className="w-6 h-6 rounded bg-accent" />
+          <div className="w-7 h-7 rounded-lg bg-accent flex items-center justify-center">
+            <span className="text-xs font-black text-black leading-none select-none">M</span>
+          </div>
         </div>
         <span className="text-sm font-bold text-text-primary opacity-0 group-hover:opacity-100 transition-opacity duration-200 whitespace-nowrap">
           MyFTB

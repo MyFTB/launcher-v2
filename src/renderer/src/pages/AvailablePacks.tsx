@@ -179,7 +179,7 @@ export default function AvailablePacks() {
     <div className="p-6 animate-fade-in">
       <div className="mb-6 flex items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-text-primary">Verfügbare Modpacks</h1>
+          <h1 className="text-2xl font-bold text-text-primary tracking-tight">Verfügbare Modpacks</h1>
           <p className="text-text-secondary mt-1 text-sm">
             Entdecke und installiere neue Modpacks.
           </p>
@@ -243,11 +243,19 @@ export default function AvailablePacks() {
         </div>
       ) : filteredPacks.length === 0 ? (
         <div className="card px-6 py-16 text-center">
-          <p className="text-text-secondary text-sm">
-            {search ? `Kein Modpack gefunden für "${search}".` : 'Keine verfügbaren Modpacks.'}
+          <div className="w-12 h-12 rounded-xl bg-bg-elevated flex items-center justify-center mx-auto mb-4">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="w-6 h-6 text-text-muted">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+            </svg>
+          </div>
+          <p className="text-sm font-medium text-text-secondary">
+            {search ? `Keine Ergebnisse für "${search}"` : 'Keine Modpacks verfügbar'}
+          </p>
+          <p className="text-xs text-text-muted mt-1">
+            {search ? 'Überprüfe die Schreibweise oder passe den Suchbegriff an.' : 'Prüfe deine Verbindung oder versuche es später erneut.'}
           </p>
           {search && (
-            <button className="btn-ghost mt-3" onClick={() => setSearch('')}>
+            <button className="btn-ghost mt-4" onClick={() => setSearch('')}>
               Suche löschen
             </button>
           )}

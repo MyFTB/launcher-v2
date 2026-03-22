@@ -18,7 +18,7 @@
   --color-border-focus: #83da38;
 
   --font-sans:
-    Lato, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;
+    'Outfit Variable', system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;
 
   --animate-fade-in: fadeIn 0.15s ease-out;
   --animate-slide-up: slideUp 0.2s ease-out;
@@ -77,11 +77,11 @@
 }
 
 @utility btn {
-  @apply inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-all duration-150 focus:outline-hidden disabled:opacity-50 disabled:cursor-not-allowed no-drag;
+  @apply inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-all duration-150 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1 focus-visible:ring-offset-bg-base disabled:opacity-50 disabled:cursor-not-allowed no-drag;
 }
 
 @utility btn-primary {
-  @apply btn bg-accent text-black hover:bg-accent-dim active:scale-95;
+  @apply btn bg-accent text-black hover:bg-accent-dim hover:shadow-[0_0_20px_rgba(131,218,56,0.3)] active:scale-95;
 }
 
 @utility btn-secondary {
@@ -125,7 +125,12 @@
     padding: 0;
     background-color: var(--color-bg-base);
     color: var(--color-text-primary);
-    font-family: 'Lato', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-family: 'Outfit Variable', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+
+  h1,
+  h2 {
+    text-wrap: balance;
   }
 
   /* Custom scrollbar */

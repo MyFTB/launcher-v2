@@ -57,7 +57,7 @@ export default function ModpackCard({
 
   return (
     <div
-      className="card relative flex flex-col overflow-hidden group cursor-pointer transition-all duration-200 hover:border-border-focus hover:shadow-lg"
+      className="card relative flex flex-col overflow-hidden group cursor-pointer transition-all duration-200 hover:border-border-focus hover:shadow-[0_4px_24px_rgba(131,218,56,0.12)]"
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       onContextMenu={onContextMenu}
@@ -90,12 +90,12 @@ export default function ModpackCard({
 
         {/* Update / New badges */}
         {hasUpdate && (
-          <div className="absolute top-2 left-2 px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-500/90 text-black backdrop-blur-sm">
+          <div className="absolute top-2 left-2 px-2 py-0.5 rounded text-xs font-semibold bg-amber-500/90 text-black backdrop-blur-sm">
             Update
           </div>
         )}
         {!hasUpdate && isNew && (
-          <div className="absolute top-2 left-2 px-2 py-0.5 rounded-full text-xs font-semibold bg-accent/90 text-white backdrop-blur-sm">
+          <div className="absolute top-2 left-2 px-2 py-0.5 rounded text-xs font-semibold bg-accent/90 text-white backdrop-blur-sm">
             Neu
           </div>
         )}
