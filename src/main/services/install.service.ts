@@ -22,9 +22,7 @@ import { configService } from './config.service'
 import { getMainWindow } from '../app-state'
 import { ensureRuntime, resolveJavaPath } from './java.service'
 import type {
-  ModpackManifestReference,
   ModpackManifest,
-  FileTask,
   FeatureCondition,
   InstallProgressEvent,
   InstallCompleteEvent,
@@ -434,7 +432,7 @@ class InstallService {
       evaluateCondition(task.when, selectedFeatures),
     )
 
-    let total = tasks.length
+    const total = tasks.length
     let finished = 0
     let failed = 0
 

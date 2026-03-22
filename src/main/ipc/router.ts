@@ -1,4 +1,4 @@
-import { ipcMain, ipcMain as ipc, dialog, shell, app, BrowserWindow } from 'electron'
+import { ipcMain, dialog, shell, app, BrowserWindow } from 'electron'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import os from 'os'
@@ -101,7 +101,8 @@ export function registerIpcHandlers(): void {
   ipcMain.on('window:maximize', (e) => {
     const win = BrowserWindow.fromWebContents(e.sender)
     if (!win) return
-    win.isMaximized() ? win.unmaximize() : win.maximize()
+    if (win.isMaximized()) win.unmaximize()
+    else win.maximize()
   })
   ipcMain.on('window:close', (e) => BrowserWindow.fromWebContents(e.sender)?.close())
 

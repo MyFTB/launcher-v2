@@ -6,7 +6,6 @@
 
 import path from 'node:path'
 import fs from 'node:fs/promises'
-import { createReadStream } from 'node:fs'
 import { createInterface } from 'node:readline'
 import { ChildProcess } from 'node:child_process'
 import { setMaxListeners } from 'node:events'
@@ -18,7 +17,6 @@ import { Constants, fmt } from '../constants'
 import { configService } from './config.service'
 import { getSelectedProfile } from './auth.service'
 import { installService } from './install.service'
-import { getMainWindow } from '../app-state'
 import { resolveJavaPath } from './java.service'
 import type {
   LaunchStartPayload,

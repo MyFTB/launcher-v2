@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { ElectronAPI, LauncherConfig, ModpackManifestReference } from '../shared/types'
+import type { ElectronAPI, LauncherConfig } from '../shared/types'
 
 /**
  * Exposes a typed ElectronAPI to the renderer via contextBridge.
