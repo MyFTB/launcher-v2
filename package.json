@@ -112,5 +112,9 @@
       "repo": "launcher-v2"
     }
   },
-  "license": "GPL-3.0-or-later"
+  "license": "GPL-3.0-or-later",
+  "author": {
+    "name": "MyFTB",
+    "url": "https://myftb.de"
+  }
 }

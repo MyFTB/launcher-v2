@@ -78,7 +78,7 @@ jobs:
       # signing certificates.  --config.publish=never ensures electron-builder
       # never attempts to upload anything to GitHub Releases.
       - name: Package (smoke test, no publish)
-        run: npx electron-builder --dir --config.publish=never
+        run: npx electron-builder --dir --publish never
         env:
           # electron-builder still needs a token env var present on some
           # platforms even when publish is disabled — provide a placeholder so
