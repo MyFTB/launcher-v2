@@ -73,7 +73,7 @@ export default function UpdateBanner() {
       {state.status === 'available' && (
         <div className="flex items-center justify-between gap-4 px-4 py-2 bg-bg-elevated border-b border-accent/25 text-sm no-drag">
           <div className="flex items-center gap-2">
-            <span className="w-1.5 h-1.5 rounded-full bg-accent flex-shrink-0" />
+            <span className="w-1.5 h-1.5 rounded-full bg-accent shrink-0" />
             <span className="text-text-secondary">
               Version <span className="font-semibold text-text-primary">{state.version}</span> verfügbar
             </span>
@@ -100,7 +100,7 @@ export default function UpdateBanner() {
 
       {state.status === 'downloading' && (
         <div className="flex items-center gap-3 px-4 py-2 bg-bg-elevated border-b border-border no-drag">
-          <span className="text-xs text-text-secondary flex-shrink-0">
+          <span className="text-xs text-text-secondary shrink-0">
             Update {Math.round(state.percent)}%
           </span>
           <div className="flex-1 h-1 bg-bg-overlay rounded-full overflow-hidden">
@@ -109,7 +109,7 @@ export default function UpdateBanner() {
               style={{ width: `${state.percent}%` }}
             />
           </div>
-          <span className="text-xs text-text-muted flex-shrink-0">
+          <span className="text-xs text-text-muted shrink-0">
             {formatSpeed(state.bytesPerSecond)}
           </span>
         </div>
@@ -118,7 +118,7 @@ export default function UpdateBanner() {
       {state.status === 'downloaded' && (
         <div className="flex items-center justify-between gap-4 px-4 py-2 bg-accent/10 border-b border-accent/30 text-sm no-drag">
           <div className="flex items-center gap-2">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} className="w-4 h-4 text-accent flex-shrink-0">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} className="w-4 h-4 text-accent shrink-0">
               <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
             </svg>
             <span className="text-text-secondary">
@@ -136,7 +136,7 @@ export default function UpdateBanner() {
 
       {state.status === 'error' && (
         <div className="flex items-center gap-2 px-4 py-2 bg-red-900/20 border-b border-red-700/30 text-sm no-drag">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-4 h-4 text-red-400 flex-shrink-0">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-4 h-4 text-red-400 shrink-0">
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
           </svg>
           <span className="text-red-400 text-xs">Update-Fehler: {state.message}</span>

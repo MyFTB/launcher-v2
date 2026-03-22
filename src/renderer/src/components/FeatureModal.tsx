@@ -40,7 +40,7 @@ export default function FeatureModal({ features, onConfirm, onCancel }: FeatureM
             >
               <input
                 type="checkbox"
-                className="mt-0.5 w-4 h-4 rounded border-border bg-bg-elevated accent-accent cursor-pointer flex-shrink-0"
+                className="mt-0.5 w-4 h-4 rounded border-border bg-bg-elevated accent-accent cursor-pointer shrink-0"
                 checked={selected.has(feature.name)}
                 onChange={() => toggleFeature(feature.name)}
               />

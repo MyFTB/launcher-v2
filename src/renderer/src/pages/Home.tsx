@@ -15,7 +15,7 @@ const RecentPackCard = memo(function RecentPackCard({ pack, onPlay }: { pack: Mo
 
   return (
     <div className="card-interactive flex items-center gap-4 p-4 group">
-      <div className="w-14 h-14 rounded-lg bg-bg-elevated flex-shrink-0 overflow-hidden">
+      <div className="w-14 h-14 rounded-lg bg-bg-elevated shrink-0 overflow-hidden">
         {logoUrl ? (
           <img src={logoUrl} alt={pack.title} className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105" />
         ) : (
@@ -154,14 +154,14 @@ export default function Home() {
                         <img
                           src={`https://mc-heads.net/avatar/${p.uuid}/28`}
                           alt={p.lastKnownUsername}
-                          className="w-7 h-7 rounded flex-shrink-0"
+                          className="w-7 h-7 rounded shrink-0"
                           width="28"
                           height="28"
                           loading="lazy"
                         />
                         <span className="text-sm text-text-primary flex-1 truncate">{p.lastKnownUsername}</span>
                         {p.uuid === selectedUuid && (
-                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} className="w-4 h-4 text-accent flex-shrink-0">
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} className="w-4 h-4 text-accent shrink-0">
                             <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                           </svg>
                         )}
@@ -194,7 +194,7 @@ export default function Home() {
       {/* Not-authenticated banner */}
       {isLoggedIn === false && (
         <div className="mb-6 flex items-start gap-3 px-4 py-3.5 rounded-lg bg-amber-900/20 border border-amber-700/40 animate-fade-in">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-5 h-5 text-amber-400 shrink-0 mt-0.5">
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
           </svg>
           <div className="flex-1 min-w-0">
@@ -204,7 +204,7 @@ export default function Home() {
             </p>
           </div>
           <button
-            className="btn-primary text-xs flex-shrink-0"
+            className="btn-primary text-xs shrink-0"
             onClick={() => navigate('/settings')}
           >
             Anmelden
@@ -215,7 +215,7 @@ export default function Home() {
       {/* Recently played */}
       <section className="mb-8">
         <div className="flex items-center gap-3 mb-3">
-          <h2 className="text-xs font-semibold text-text-muted uppercase tracking-wider flex-shrink-0">
+          <h2 className="text-xs font-semibold text-text-muted uppercase tracking-wider shrink-0">
             Zuletzt gespielt
           </h2>
           <div className="h-px bg-border flex-1" />
@@ -224,7 +224,7 @@ export default function Home() {
           <div className="space-y-3">
             {[0, 1, 2].map((i) => (
               <div key={i} className="card flex items-center gap-4 p-4 animate-pulse">
-                <div className="w-14 h-14 rounded-lg bg-bg-elevated flex-shrink-0" />
+                <div className="w-14 h-14 rounded-lg bg-bg-elevated shrink-0" />
                 <div className="flex-1 space-y-2">
                   <div className="h-4 bg-bg-elevated rounded w-1/2" />
                   <div className="h-3 bg-bg-elevated rounded w-1/3" />
@@ -264,7 +264,7 @@ export default function Home() {
       {/* Community links */}
       <section>
         <div className="flex items-center gap-3 mb-3">
-          <h2 className="text-xs font-semibold text-text-muted uppercase tracking-wider flex-shrink-0">
+          <h2 className="text-xs font-semibold text-text-muted uppercase tracking-wider shrink-0">
             Community
           </h2>
           <div className="h-px bg-border flex-1" />
@@ -274,7 +274,7 @@ export default function Home() {
             className="card-interactive flex items-center gap-4 px-5 py-4 group text-left w-full"
             onClick={() => window.electronAPI.systemOpenUrl('https://discord.gg/myftb')}
           >
-            <div className="w-10 h-10 rounded-xl bg-indigo-500/15 flex items-center justify-center flex-shrink-0 group-hover:bg-indigo-500/25 transition-colors duration-150">
+            <div className="w-10 h-10 rounded-xl bg-indigo-500/15 flex items-center justify-center shrink-0 group-hover:bg-indigo-500/25 transition-colors duration-150">
               <DiscordIcon />
             </div>
             <div>
@@ -286,7 +286,7 @@ export default function Home() {
             className="card-interactive flex items-center gap-4 px-5 py-4 group text-left w-full"
             onClick={() => window.electronAPI.systemOpenUrl('https://myftb.de')}
           >
-            <div className="w-10 h-10 rounded-xl bg-accent/10 flex items-center justify-center flex-shrink-0 group-hover:bg-accent/20 transition-colors duration-150">
+            <div className="w-10 h-10 rounded-xl bg-accent/10 flex items-center justify-center shrink-0 group-hover:bg-accent/20 transition-colors duration-150">
               <WebIcon />
             </div>
             <div>

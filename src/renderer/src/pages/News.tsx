@@ -32,7 +32,7 @@ function PostCard({ post }: { post: Post }) {
   return (
     <article className="card-interactive flex flex-col overflow-hidden group">
       {post.image && (
-        <div className="w-full h-40 overflow-hidden bg-bg-elevated flex-shrink-0">
+        <div className="w-full h-40 overflow-hidden bg-bg-elevated shrink-0">
           <img
             src={post.image}
             alt={post.title}

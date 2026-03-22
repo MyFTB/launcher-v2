@@ -31,7 +31,7 @@ function PackKeyInput({ value, onChange }: { value: string; onChange: (v: string
 
   return (
     <div
-      className="input flex flex-wrap gap-1.5 min-h-[38px] h-auto cursor-text"
+      className="input flex flex-wrap gap-1.5 min-h-9.5 h-auto cursor-text"
       onClick={() => inputRef.current?.focus()}
     >
       {keys.map((k) => (
@@ -52,7 +52,7 @@ function PackKeyInput({ value, onChange }: { value: string; onChange: (v: string
       <input
         ref={inputRef}
         type="text"
-        className="flex-1 min-w-[120px] bg-transparent outline-none text-sm text-text-primary placeholder:text-text-muted"
+        className="flex-1 min-w-30 bg-transparent outline-none text-sm text-text-primary placeholder:text-text-muted"
         placeholder={keys.length === 0 ? 'Zugangscode eingeben…' : 'Weiteren Schlüssel hinzufügen…'}
         value={input}
         onChange={(e) => setInput(e.target.value)}
@@ -318,7 +318,7 @@ export default function Settings() {
                   </div>
                   {isSelected && (
                     <button
-                      className="btn-ghost text-xs text-red-400 hover:text-red-300 flex-shrink-0"
+                      className="btn-ghost text-xs text-red-400 hover:text-red-300 shrink-0"
                       onClick={(e) => { e.stopPropagation(); handleLogout() }}
                     >
                       Abmelden
@@ -364,7 +364,7 @@ export default function Settings() {
               value={form.installationDir}
               onChange={(e) => update('installationDir', e.target.value)}
             />
-            <button className="btn-secondary flex-shrink-0" onClick={handlePickDir}>
+            <button className="btn-secondary shrink-0" onClick={handlePickDir}>
               Durchsuchen
             </button>
           </div>
@@ -380,7 +380,7 @@ export default function Settings() {
           </div>
           <button
             type="button"
-            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors duration-200 focus:outline-none flex-shrink-0 ${
+            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors duration-200 focus:outline-none shrink-0 ${
               form.allowWebstart ? 'bg-accent' : 'bg-bg-overlay'
             }`}
             onClick={() => update('allowWebstart', !form.allowWebstart)}
@@ -608,7 +608,7 @@ const PlayerAvatar = memo(function PlayerAvatar({ uuid, username }: { uuid: stri
   const [failed, setFailed] = useState(false)
   if (failed) {
     return (
-      <div className="w-8 h-8 rounded flex-shrink-0 bg-bg-overlay flex items-center justify-center text-xs font-bold text-text-secondary select-none">
+      <div className="w-8 h-8 rounded shrink-0 bg-bg-overlay flex items-center justify-center text-xs font-bold text-text-secondary select-none">
         {username.charAt(0).toUpperCase()}
       </div>
     )
@@ -617,7 +617,7 @@ const PlayerAvatar = memo(function PlayerAvatar({ uuid, username }: { uuid: stri
     <img
       src={`https://mc-heads.net/avatar/${uuid}/32`}
       alt={username}
-      className="w-8 h-8 rounded flex-shrink-0"
+      className="w-8 h-8 rounded shrink-0"
       width="32"
       height="32"
       loading="lazy"
@@ -628,7 +628,7 @@ const PlayerAvatar = memo(function PlayerAvatar({ uuid, username }: { uuid: stri
 
 function MicrosoftIcon() {
   return (
-    <svg viewBox="0 0 21 21" className="w-4 h-4 flex-shrink-0" fill="none">
+    <svg viewBox="0 0 21 21" className="w-4 h-4 shrink-0" fill="none">
       <rect x="1" y="1" width="9" height="9" fill="#f25022" />
       <rect x="11" y="1" width="9" height="9" fill="#00a4ef" />
       <rect x="1" y="11" width="9" height="9" fill="#7fba00" />

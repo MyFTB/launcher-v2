@@ -4,7 +4,7 @@
  */
 export default function TitleBar({ title = 'MyFTB Launcher' }: { title?: string } = {}) {
   return (
-    <div className="drag-region flex items-center justify-between h-8 px-3 bg-bg-base border-b border-border flex-shrink-0 select-none">
+    <div className="drag-region flex items-center justify-between h-8 px-3 bg-bg-base border-b border-border shrink-0 select-none">
       {/* App name */}
       <span className="text-xs text-text-muted font-medium no-drag">{title}</span>
 

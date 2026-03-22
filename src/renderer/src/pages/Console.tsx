@@ -225,7 +225,7 @@ export default function Console() {
   return (
     <div className="flex flex-col h-full">
       {/* Toolbar */}
-      <div className="flex items-center justify-between gap-3 px-4 py-3 bg-bg-surface border-b border-border flex-shrink-0">
+      <div className="flex items-center justify-between gap-3 px-4 py-3 bg-bg-surface border-b border-border shrink-0">
         <div className="flex items-center gap-3">
           <h1 className="text-sm font-semibold text-text-primary">Konsole</h1>
           {launchState && (
@@ -332,7 +332,7 @@ export default function Console() {
           >
             {uploading ? (
               <>
-                <svg className="animate-spin w-3.5 h-3.5 flex-shrink-0" viewBox="0 0 24 24" fill="none">
+                <svg className="animate-spin w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none">
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z" />
                 </svg>
@@ -353,7 +353,7 @@ export default function Console() {
       {/* Upload result / error */}
       {(uploadUrl || uploadError) && (
         <div
-          className={`px-4 py-2.5 text-xs flex items-center gap-2 flex-shrink-0 border-b ${
+          className={`px-4 py-2.5 text-xs flex items-center gap-2 shrink-0 border-b ${
             uploadError
               ? 'bg-red-900/20 border-red-700/30'
               : 'bg-accent/5 border-accent/20'
@@ -362,12 +362,12 @@ export default function Console() {
           {uploadError ? (
             <>
               {/* Error icon */}
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-4 h-4 text-red-400 flex-shrink-0">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-4 h-4 text-red-400 shrink-0">
                 <circle cx="12" cy="12" r="10" /><path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4m0 4h.01" />
               </svg>
               <span className="text-red-400 flex-1 truncate">{uploadError}</span>
               <button
-                className="flex-shrink-0 px-2.5 py-1 rounded bg-red-900/30 text-red-300 hover:bg-red-800/40 transition-colors"
+                className="shrink-0 px-2.5 py-1 rounded bg-red-900/30 text-red-300 hover:bg-red-800/40 transition-colors"
                 onClick={handleUpload}
               >
                 Erneut versuchen
@@ -376,13 +376,13 @@ export default function Console() {
           ) : (
             <>
               {/* Link icon */}
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-4 h-4 text-accent flex-shrink-0">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-4 h-4 text-accent shrink-0">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
               </svg>
               <span className="text-text-secondary flex-1 font-mono truncate">{uploadUrl}</span>
               {/* Copy URL */}
               <button
-                className="flex-shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded bg-bg-overlay text-text-secondary hover:text-text-primary hover:bg-bg-elevated transition-colors"
+                className="shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded bg-bg-overlay text-text-secondary hover:text-text-primary hover:bg-bg-elevated transition-colors"
                 onClick={handleCopy}
                 title="URL kopieren"
               >
@@ -404,7 +404,7 @@ export default function Console() {
               </button>
               {/* Open in browser */}
               <button
-                className="flex-shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded bg-accent/10 text-accent hover:bg-accent/20 transition-colors"
+                className="shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded bg-accent/10 text-accent hover:bg-accent/20 transition-colors"
                 onClick={() => window.electronAPI.systemOpenUrl(uploadUrl!)}
                 title="Im Browser öffnen"
               >
@@ -417,7 +417,7 @@ export default function Console() {
           )}
           {/* Dismiss */}
           <button
-            className="flex-shrink-0 p-1 rounded text-text-muted hover:text-text-primary hover:bg-bg-overlay transition-colors"
+            className="shrink-0 p-1 rounded text-text-muted hover:text-text-primary hover:bg-bg-overlay transition-colors"
             onClick={() => { setUploadUrl(null); setUploadError(null) }}
             title="Schließen"
           >

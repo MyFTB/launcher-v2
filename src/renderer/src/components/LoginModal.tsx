@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import logoUrl from '../assets/logo.svg'
 
 interface LoginModalProps {
   onClose: () => void
@@ -41,10 +42,10 @@ export default function LoginModal({ onClose }: LoginModalProps) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm animate-fade-in">
       <div className="card w-full max-w-sm mx-4 p-8 animate-slide-up shadow-2xl text-center">
-        {/* Logo placeholder */}
+        {/* App logo */}
         <div className="flex justify-center mb-6">
           <div className="w-16 h-16 rounded-2xl bg-accent/10 border border-accent/30 flex items-center justify-center">
-            <div className="w-8 h-8 rounded bg-accent" />
+            <img src={logoUrl} alt="MyFTB" className="w-10 h-10" draggable={false} />
           </div>
         </div>
 
@@ -85,7 +86,7 @@ export default function LoginModal({ onClose }: LoginModalProps) {
 
 function MicrosoftIcon() {
   return (
-    <svg viewBox="0 0 21 21" className="w-4 h-4 flex-shrink-0" fill="none">
+    <svg viewBox="0 0 21 21" className="w-4 h-4 shrink-0" fill="none">
       <rect x="1" y="1" width="9" height="9" fill="#f25022" />
       <rect x="11" y="1" width="9" height="9" fill="#00a4ef" />
       <rect x="1" y="11" width="9" height="9" fill="#7fba00" />

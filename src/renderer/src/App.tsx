@@ -172,7 +172,7 @@ export default function App() {
           >
             {/* Resize handle */}
             <div
-              className="flex items-center justify-end px-3 h-6 bg-bg-elevated border-b border-border flex-shrink-0 cursor-ns-resize select-none"
+              className="flex items-center justify-end px-3 h-6 bg-bg-elevated border-b border-border shrink-0 cursor-ns-resize select-none"
               onMouseDown={(e) => {
                 if (!drawerRef.current) return
                 dragRef.current = { startY: e.clientY, startH: drawerHeight }

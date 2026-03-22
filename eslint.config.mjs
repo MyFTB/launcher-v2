@@ -1,11 +1,11 @@
 import globals from 'globals'
 import tseslint from 'typescript-eslint'
 
-export default tseslint.config(
+export default [
   { ignores: ['out/**', 'node_modules/**', 'src/renderer/out/**'] },
+  ...tseslint.configs.recommended,
   {
     files: ['src/**/*.{ts,tsx}'],
-    extends: [tseslint.configs.recommended],
     languageOptions: {
       ecmaVersion: 2022,
       globals: {
@@ -19,4 +19,4 @@ export default tseslint.config(
       '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }]
     }
   }
-)
+] 
