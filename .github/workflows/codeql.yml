@@ -42,6 +42,12 @@ jobs:
           languages: javascript-typescript
           # Use the default security-and-quality query suite
           queries: security-and-quality
+          # Exclude build output and dependencies — CodeQL analyses TS source directly
+          config: |
+            paths-ignore:
+              - out
+              - dist
+              - node_modules
 
       - name: Set up Node.js (LTS)
         uses: actions/setup-node@v6
@@ -51,9 +57,6 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
-
-      - name: Build
-        run: npx electron-vite build
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4
