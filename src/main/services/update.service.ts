@@ -3,14 +3,18 @@ import { autoUpdater } from 'electron-updater'
 import type { UpdateInfo, ProgressInfo } from 'electron-updater'
 import { IpcChannels } from '../ipc/channels'
 import { getMainWindow } from '../app-state'
+import { configService } from './config.service'
 
 class UpdateService {
   private checking = false
 
   registerHandlers(): void {
+    const channel = configService.get().updateChannel ?? 'stable'
     autoUpdater.autoDownload = false
     autoUpdater.autoInstallOnAppQuit = true
     autoUpdater.logger = console
+    autoUpdater.channel = channel === 'experimental' ? 'experimental' : 'latest'
+    autoUpdater.allowPrerelease = channel === 'experimental'
 
     autoUpdater.on('update-available', (info: UpdateInfo) => {
       getMainWindow()?.webContents.send(IpcChannels.UPDATE_AVAILABLE, {
@@ -59,6 +63,11 @@ class UpdateService {
 
     ipcMain.on(IpcChannels.UPDATE_INSTALL, () => {
       autoUpdater.quitAndInstall(false, true)
+    })
+
+    ipcMain.on(IpcChannels.UPDATE_SET_CHANNEL, (_event, ch: 'stable' | 'experimental') => {
+      autoUpdater.channel = ch === 'experimental' ? 'experimental' : 'latest'
+      autoUpdater.allowPrerelease = ch === 'experimental'
     })
 
     // Auto-check 5 seconds after startup — only in packaged builds

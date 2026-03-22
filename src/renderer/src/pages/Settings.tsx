@@ -118,6 +118,7 @@ interface FormState {
   gameWidth: number
   gameHeight: number
   allowWebstart: boolean
+  updateChannel: 'stable' | 'experimental'
 }
 
 function formFromConfig(c: LauncherConfig): FormState {
@@ -130,6 +131,7 @@ function formFromConfig(c: LauncherConfig): FormState {
     gameWidth: c.gameWidth ?? 854,
     gameHeight: c.gameHeight ?? 480,
     allowWebstart: c.allowWebstart ?? true,
+    updateChannel: c.updateChannel ?? 'stable',
   }
 }
 
@@ -143,6 +145,7 @@ export default function Settings() {
     gameWidth: 854,
     gameHeight: 480,
     allowWebstart: true,
+    updateChannel: 'stable',
   })
   const [original, setOriginal] = useState<FormState | null>(null)
   const [systemInfo, setSystemInfo] = useState<SystemInfoResult | null>(null)
@@ -557,6 +560,36 @@ export default function Settings() {
         <div className="text-right">
           <span className="text-xs text-text-muted">Architektur</span>
           <p className="text-sm font-medium text-text-primary mt-0.5">{systemInfo?.arch ?? '—'}</p>
+        </div>
+      </div>
+
+      {/* Update channel */}
+      <div className="card px-5 py-4 mb-6">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <label className="text-xs font-medium text-text-secondary">Update-Kanal</label>
+            <p className="text-xs text-text-muted mt-0.5">
+              Experimentell enthält Vorabversionen und kann instabil sein.
+            </p>
+          </div>
+          <div className="flex items-center gap-1 bg-bg-base rounded-lg p-1 shrink-0">
+            {(['stable', 'experimental'] as const).map((ch) => (
+              <button
+                key={ch}
+                onClick={() => {
+                  update('updateChannel', ch)
+                  window.electronAPI.updateSetChannel(ch)
+                }}
+                className={`px-3 py-1 rounded-md text-xs font-medium transition-colors duration-150 ${
+                  form.updateChannel === ch
+                    ? 'bg-bg-elevated text-text-primary shadow-sm'
+                    : 'text-text-muted hover:text-text-secondary'
+                }`}
+              >
+                {ch === 'stable' ? 'Stabil' : 'Experimentell'}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 

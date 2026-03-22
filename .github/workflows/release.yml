@@ -47,9 +47,28 @@ jobs:
   # Platform build jobs — run in parallel
   # ============================================================================
 
+  # Determine the update channel once and share it across all build jobs.
+  # Tags with a prerelease suffix (e.g. v2.0.0-alpha.1) publish to the
+  # "experimental" channel so stable users are never offered these builds.
+  resolve-channel:
+    name: Resolve update channel
+    runs-on: ubuntu-latest
+    outputs:
+      channel: ${{ steps.ch.outputs.channel }}
+    steps:
+      - name: Set channel
+        id: ch
+        run: |
+          if [[ "${{ github.ref_name }}" == *-* ]]; then
+            echo "channel=experimental" >> "$GITHUB_OUTPUT"
+          else
+            echo "channel=latest" >> "$GITHUB_OUTPUT"
+          fi
+
   build-windows:
     name: Build — Windows
     runs-on: windows-latest
+    needs: resolve-channel
 
     steps:
       - name: Checkout repository
@@ -71,7 +90,7 @@ jobs:
       # package.json under build.win.  --publish always uploads artifacts
       # directly to the draft GitHub Release created by the release job.
       - name: Package & publish — Windows
-        run: npx electron-builder --win --publish always
+        run: npx electron-builder --win --publish always --config.publish.channel=${{ needs.resolve-channel.outputs.channel }}
         env:
           # GitHub Releases upload token
           GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
@@ -86,6 +105,7 @@ jobs:
   build-macos:
     name: Build — macOS
     runs-on: macos-latest
+    needs: resolve-channel
 
     steps:
       - name: Checkout repository
@@ -103,23 +123,12 @@ jobs:
       - name: Build (electron-vite)
         run: npx electron-vite build
 
-      # electron-builder --mac produces DMG images for x64 and arm64 (Apple
-      # Silicon) as defined in package.json under build.mac.
-      # The CSC_* secrets inject the Developer ID certificate; the APPLE_*
-      # secrets enable notarization via Apple's notary service.
       - name: Package & publish — macOS
-        run: npx electron-builder --mac --publish always
+        run: npx electron-builder --mac --publish always --config.publish.channel=${{ needs.resolve-channel.outputs.channel }}
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
-
-          # macOS Developer ID signing certificate (.p12, base64-encoded)
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-
-          # Apple notarization credentials
-          # APPLE_ID:                  your Apple ID email (e.g. dev@example.com)
-          # APPLE_APP_SPECIFIC_PASSWORD: app-specific password from appleid.apple.com
-          # APPLE_TEAM_ID:             10-character team ID from developer.apple.com
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -129,6 +138,7 @@ jobs:
   build-linux:
     name: Build — Linux
     runs-on: ubuntu-latest
+    needs: resolve-channel
 
     steps:
       - name: Checkout repository
@@ -149,7 +159,7 @@ jobs:
       # electron-builder --linux produces AppImage and .deb packages as defined
       # in package.json under build.linux.
       - name: Package & publish — Linux
-        run: npx electron-builder --linux --publish always
+        run: npx electron-builder --linux --publish always --config.publish.channel=${{ needs.resolve-channel.outputs.channel }}
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
 
@@ -161,6 +171,7 @@ jobs:
     name: Create GitHub Release
     runs-on: ubuntu-latest
     needs:
+      - resolve-channel
       - build-windows
       - build-macos
       - build-linux

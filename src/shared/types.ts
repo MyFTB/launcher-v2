@@ -124,6 +124,8 @@ export interface LauncherConfig {
   /** Key-value map for AutoConfig feature state */
   autoConfigs: Record<string, string>
   profileStore: LauncherProfileStore
+  /** Update channel: stable = releases only, experimental = prereleases included */
+  updateChannel: 'stable' | 'experimental'
 }
 
 export const DEFAULT_CONFIG: LauncherConfig = {
@@ -138,7 +140,8 @@ export const DEFAULT_CONFIG: LauncherConfig = {
   allowWebstart: true,
   lastPlayedPacks: [],
   autoConfigs: {},
-  profileStore: { profiles: [], selectedProfileUuid: undefined }
+  profileStore: { profiles: [], selectedProfileUuid: undefined },
+  updateChannel: 'stable',
 }
 
 // ─── IPC Payload Types ───────────────────────────────────────
@@ -270,6 +273,7 @@ export interface ElectronAPI {
   updateCheck(): Promise<void>
   updateDownload(): Promise<void>
   updateInstall(): void
+  updateSetChannel(channel: 'stable' | 'experimental'): void
 
   // Push event listeners (renderer side)
   on(channel: string, listener: (...args: unknown[]) => void): () => void

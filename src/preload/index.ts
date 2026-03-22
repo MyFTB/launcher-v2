@@ -51,6 +51,7 @@ const api: ElectronAPI = {
   updateCheck: () => ipcRenderer.invoke('update:check'),
   updateDownload: () => ipcRenderer.invoke('update:download'),
   updateInstall: () => ipcRenderer.send('update:install'),
+  updateSetChannel: (ch) => ipcRenderer.send('update:set-channel', ch),
 
   // ── Window controls ───────────────────────────────────────
   windowMinimize: () => ipcRenderer.send('window:minimize'),

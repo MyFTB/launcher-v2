@@ -97,6 +97,8 @@ export const IpcChannels = {
   UPDATE_DOWNLOAD: 'update:download',
   /** Renderer→Main: Quit app and install the downloaded update */
   UPDATE_INSTALL: 'update:install',
+  /** Renderer→Main: Switch update channel at runtime */
+  UPDATE_SET_CHANNEL: 'update:set-channel',
   /** Main→Renderer push: update is available */
   UPDATE_AVAILABLE: 'update:available',
   /** Main→Renderer push: no update available */
