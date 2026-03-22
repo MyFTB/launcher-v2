@@ -5,7 +5,7 @@ import TitleBar from './components/TitleBar'
  * Standalone console window — rendered when ?standalone=1 query param is present.
  * No sidebar, no routing; just the title bar and the full Console component.
  */
-export default function ConsoleStandalone(): JSX.Element {
+export default function ConsoleStandalone() {
   return (
     <div className="flex flex-col h-full bg-bg-base text-text-primary overflow-hidden">
       <TitleBar title="Konsole — MyFTB Launcher" />

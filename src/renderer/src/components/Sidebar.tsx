@@ -41,7 +41,7 @@ const navItems = [
   { to: '/installed', label: 'Installiert', Icon: CheckIcon },
 ]
 
-export default function Sidebar(): JSX.Element {
+export default function Sidebar() {
   const [newPacksCount, setNewPacksCount] = useState(() => getStoredNewPacks().size)
 
   useEffect(() => {

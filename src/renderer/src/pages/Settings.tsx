@@ -4,7 +4,7 @@ import LoginModal from '../components/LoginModal'
 
 // ─── PackKey chip input ────────────────────────────────────────────────────────
 
-function PackKeyInput({ value, onChange }: { value: string; onChange: (v: string) => void }): JSX.Element {
+function PackKeyInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   const keys = value.split(',').map((k) => k.trim()).filter(Boolean)
   const [input, setInput] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
@@ -93,7 +93,7 @@ function memLabel(mb: number): string {
   return mb >= 1024 ? `${mb / 1024} GB` : `${mb} MB`
 }
 
-function ThumbLabel({ value, min, max }: { value: number; min: number; max: number }): JSX.Element {
+function ThumbLabel({ value, min, max }: { value: number; min: number; max: number }) {
   const pct = max === min ? 0 : ((value - min) / (max - min)) * 100
   // Correct for thumb radius (~8px) so label tracks the actual thumb center
   const offset = 8 - pct * 0.16
@@ -133,7 +133,7 @@ function formFromConfig(c: LauncherConfig): FormState {
   }
 }
 
-export default function Settings(): JSX.Element {
+export default function Settings() {
   const [form, setForm] = useState<FormState>({
     packKey: '',
     installationDir: '',
@@ -589,7 +589,7 @@ export default function Settings(): JSX.Element {
 )
 }
 
-function PlayerAvatar({ uuid, username }: { uuid: string; username: string }): JSX.Element {
+function PlayerAvatar({ uuid, username }: { uuid: string; username: string }) {
   const [failed, setFailed] = useState(false)
   if (failed) {
     return (
@@ -608,7 +608,7 @@ function PlayerAvatar({ uuid, username }: { uuid: string; username: string }): J
   )
 }
 
-function MicrosoftIcon(): JSX.Element {
+function MicrosoftIcon() {
   return (
     <svg viewBox="0 0 21 21" className="w-4 h-4 flex-shrink-0" fill="none">
       <rect x="1" y="1" width="9" height="9" fill="#f25022" />

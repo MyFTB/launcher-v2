@@ -7,7 +7,7 @@ interface FeatureModalProps {
   onCancel: () => void
 }
 
-export default function FeatureModal({ features, onConfirm, onCancel }: FeatureModalProps): JSX.Element {
+export default function FeatureModal({ features, onConfirm, onCancel }: FeatureModalProps) {
   const [selected, setSelected] = useState<Set<string>>(
     () => new Set(features.filter((f) => f.default).map((f) => f.name))
   )

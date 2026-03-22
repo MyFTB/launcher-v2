@@ -6,7 +6,7 @@ interface LoginModalProps {
 
 type LoginState = 'idle' | 'waiting' | 'error'
 
-export default function LoginModal({ onClose }: LoginModalProps): JSX.Element {
+export default function LoginModal({ onClose }: LoginModalProps) {
   const [loginState, setLoginState] = useState<LoginState>('idle')
   const [errorMessage, setErrorMessage] = useState<string>('')
 
@@ -81,7 +81,7 @@ export default function LoginModal({ onClose }: LoginModalProps): JSX.Element {
   )
 }
 
-function MicrosoftIcon(): JSX.Element {
+function MicrosoftIcon() {
   return (
     <svg viewBox="0 0 21 21" className="w-4 h-4 flex-shrink-0" fill="none">
       <rect x="1" y="1" width="9" height="9" fill="#f25022" />

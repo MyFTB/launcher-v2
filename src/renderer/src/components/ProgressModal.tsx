@@ -8,7 +8,7 @@ interface ProgressModalProps {
   onDismiss: () => void
 }
 
-export default function ProgressModal({ progress, packTitle, result, onCancel, onDismiss }: ProgressModalProps): JSX.Element {
+export default function ProgressModal({ progress, packTitle, result, onCancel, onDismiss }: ProgressModalProps) {
   const percent =
     progress && progress.total > 0
       ? Math.round((progress.finished / progress.total) * 100)

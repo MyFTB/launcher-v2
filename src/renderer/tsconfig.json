@@ -3,6 +3,7 @@
   "include": ["src/**/*", "../../src/shared/**/*"],
   "compilerOptions": {
     "composite": true,
+    "jsx": "react-jsx",
     "baseUrl": ".",
     "paths": {
       "@renderer/*": ["src/*"],

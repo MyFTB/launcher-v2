@@ -10,7 +10,7 @@ interface ContextMenuState {
   packName: string
 }
 
-export default function InstalledPacks(): JSX.Element {
+export default function InstalledPacks() {
   const navigate = useNavigate()
   const [packs, setPacks] = useState<ModpackManifestReference[]>([])
   const [updateMap, setUpdateMap] = useState<Record<string, boolean>>({})

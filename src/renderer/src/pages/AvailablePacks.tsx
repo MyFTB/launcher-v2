@@ -16,7 +16,7 @@ import {
   dispatchNewPackCount,
 } from '../utils/packBadge'
 
-export default function AvailablePacks(): JSX.Element {
+export default function AvailablePacks() {
   const [remotePacks, setRemotePacks] = useState<ModpackManifestReference[]>([])
   const [installedNames, setInstalledNames] = useState<Set<string>>(new Set())
   const [newPackNames, setNewPackNames] = useState<Set<string>>(new Set())

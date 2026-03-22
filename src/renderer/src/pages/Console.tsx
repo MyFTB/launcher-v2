@@ -35,7 +35,7 @@ function levelClass(level: LogLine['level']): string {
   }
 }
 
-export default function Console(): JSX.Element {
+export default function Console() {
   const [lines, setLines] = useState<LogLine[]>([])
   const [autoScroll, setAutoScroll] = useState(true)
   const [launchState, setLaunchState] = useState<LaunchState | null>(null)

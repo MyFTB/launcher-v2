@@ -36,7 +36,7 @@ export default function ModpackCard({
   onInstall,
   onPlay,
   onContextMenu,
-}: ModpackCardProps): JSX.Element {
+}: ModpackCardProps) {
   const [logoUrl, setLogoUrl] = useState<string | null>(null)
   const [hovered, setHovered] = useState(false)
 

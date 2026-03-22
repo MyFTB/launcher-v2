@@ -2,7 +2,7 @@
  * Custom frameless window title bar.
  * Provides drag region and close/minimize/maximize controls.
  */
-export default function TitleBar({ title = 'MyFTB Launcher' }: { title?: string } = {}): JSX.Element {
+export default function TitleBar({ title = 'MyFTB Launcher' }: { title?: string } = {}) {
   return (
     <div className="drag-region flex items-center justify-between h-8 px-3 bg-bg-base border-b border-border flex-shrink-0 select-none">
       {/* App name */}

@@ -15,7 +15,7 @@ import {
   dispatchNewPackCount,
 } from './utils/packBadge'
 
-function TerminalIcon(): JSX.Element {
+function TerminalIcon() {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-5 h-5">
       <path strokeLinecap="round" strokeLinejoin="round" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
@@ -23,7 +23,7 @@ function TerminalIcon(): JSX.Element {
   )
 }
 
-function ChevronDownIcon(): JSX.Element {
+function ChevronDownIcon() {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-4 h-4">
       <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
@@ -31,7 +31,7 @@ function ChevronDownIcon(): JSX.Element {
   )
 }
 
-function DetachIcon(): JSX.Element {
+function DetachIcon() {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-3.5 h-3.5">
       <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
@@ -42,7 +42,7 @@ function DetachIcon(): JSX.Element {
 const MIN_DRAWER_HEIGHT = 120
 const MAX_DRAWER_RATIO = 0.85
 
-export default function App(): JSX.Element {
+export default function App() {
   const [consoleOpen, setConsoleOpen] = useState(false)
   const [drawerHeight, setDrawerHeight] = useState(300)
   const drawerRef = useRef<HTMLDivElement>(null)

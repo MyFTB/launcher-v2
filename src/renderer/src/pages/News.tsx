@@ -13,7 +13,7 @@ function formatDate(dateStr: string): string {
   }
 }
 
-function SkeletonCard(): JSX.Element {
+function SkeletonCard() {
   return (
     <div className="card p-5 flex flex-col gap-3 animate-pulse">
       <div className="w-full h-40 bg-bg-elevated rounded-lg" />
@@ -28,7 +28,7 @@ function SkeletonCard(): JSX.Element {
   )
 }
 
-function PostCard({ post }: { post: Post }): JSX.Element {
+function PostCard({ post }: { post: Post }) {
   return (
     <article className="card flex flex-col overflow-hidden hover:border-border-focus transition-colors duration-150 group">
       {post.image && (
@@ -65,7 +65,7 @@ function PostCard({ post }: { post: Post }): JSX.Element {
   )
 }
 
-export default function News(): JSX.Element {
+export default function News() {
   const [posts, setPosts] = useState<Post[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
