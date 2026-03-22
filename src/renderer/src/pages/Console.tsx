@@ -66,6 +66,7 @@ export default function Console() {
   const [uploadUrl, setUploadUrl] = useState<string | null>(null)
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const currentMatchRef = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
@@ -190,6 +191,14 @@ export default function Console() {
   const handleKill = useCallback(() => {
     window.electronAPI.launchKill().catch(console.error)
   }, [])
+
+  const handleCopy = useCallback(() => {
+    if (!uploadUrl) return
+    navigator.clipboard.writeText(uploadUrl).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    }).catch(console.error)
+  }, [uploadUrl])
 
   const isRunning = launchState === 'running' || launchState === 'launching'
   const safeMatchIndex = filteredLines.length > 0 ? Math.min(matchIndex, filteredLines.length - 1) : 0
@@ -317,11 +326,19 @@ export default function Console() {
 
           {/* Upload log */}
           <button
-            className="btn-secondary text-xs py-1.5"
+            className="btn-secondary text-xs py-1.5 flex items-center gap-1.5"
             onClick={handleUpload}
             disabled={uploading || lines.length === 0}
           >
-            {uploading ? 'Lädt...' : 'Log hochladen'}
+            {uploading ? (
+              <>
+                <svg className="animate-spin w-3 h-3 flex-shrink-0" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z" />
+                </svg>
+                Lädt...
+              </>
+            ) : 'Log hochladen'}
           </button>
 
           {/* Kill button — visible when game is running */}
@@ -336,26 +353,77 @@ export default function Console() {
       {/* Upload result / error */}
       {(uploadUrl || uploadError) && (
         <div
-          className={`px-4 py-2 text-xs flex items-center justify-between gap-3 flex-shrink-0 ${
+          className={`px-4 py-2.5 text-xs flex items-center gap-2 flex-shrink-0 border-b ${
             uploadError
-              ? 'bg-red-900/20 text-red-400 border-b border-red-700/30'
-              : 'bg-accent/5 text-accent border-b border-accent/20'
+              ? 'bg-red-900/20 border-red-700/30'
+              : 'bg-accent/5 border-accent/20'
           }`}
         >
-          <span className="truncate">{uploadError ?? uploadUrl}</span>
-          {uploadUrl && (
-            <button
-              className="flex-shrink-0 underline hover:no-underline"
-              onClick={() => window.electronAPI.systemOpenUrl(uploadUrl)}
-            >
-              Öffnen
-            </button>
+          {uploadError ? (
+            <>
+              {/* Error icon */}
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-4 h-4 text-red-400 flex-shrink-0">
+                <circle cx="12" cy="12" r="10" /><path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4m0 4h.01" />
+              </svg>
+              <span className="text-red-400 flex-1 truncate">{uploadError}</span>
+              <button
+                className="flex-shrink-0 px-2.5 py-1 rounded bg-red-900/30 text-red-300 hover:bg-red-800/40 transition-colors"
+                onClick={handleUpload}
+              >
+                Erneut versuchen
+              </button>
+            </>
+          ) : (
+            <>
+              {/* Link icon */}
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-4 h-4 text-accent flex-shrink-0">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+              </svg>
+              <span className="text-text-secondary flex-1 font-mono truncate">{uploadUrl}</span>
+              {/* Copy URL */}
+              <button
+                className="flex-shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded bg-bg-overlay text-text-secondary hover:text-text-primary hover:bg-bg-elevated transition-colors"
+                onClick={handleCopy}
+                title="URL kopieren"
+              >
+                {copied ? (
+                  <>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-3.5 h-3.5 text-accent">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                    </svg>
+                    Kopiert!
+                  </>
+                ) : (
+                  <>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-3.5 h-3.5">
+                      <rect x="9" y="9" width="13" height="13" rx="2" ry="2" /><path strokeLinecap="round" strokeLinejoin="round" d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+                    </svg>
+                    Kopieren
+                  </>
+                )}
+              </button>
+              {/* Open in browser */}
+              <button
+                className="flex-shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded bg-accent/10 text-accent hover:bg-accent/20 transition-colors"
+                onClick={() => window.electronAPI.systemOpenUrl(uploadUrl!)}
+                title="Im Browser öffnen"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-3.5 h-3.5">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                </svg>
+                Öffnen
+              </button>
+            </>
           )}
+          {/* Dismiss */}
           <button
-            className="flex-shrink-0 text-text-muted hover:text-text-primary"
+            className="flex-shrink-0 p-1 rounded text-text-muted hover:text-text-primary hover:bg-bg-overlay transition-colors"
             onClick={() => { setUploadUrl(null); setUploadError(null) }}
+            title="Schließen"
           >
-            ×
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-3.5 h-3.5">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
           </button>
         </div>
       )}
