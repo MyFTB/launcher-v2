@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { memo, useEffect, useState } from 'react'
 import type { ModpackManifest, ModpackManifestReference } from '@shared/types'
 
 interface ModpackCardProps {
@@ -27,7 +27,7 @@ function detectModLoader(manifest: ModpackManifest | ModpackManifestReference): 
   return null
 }
 
-export default function ModpackCard({
+export default memo(function ModpackCard({
   manifest,
   isInstalled,
   isRunning,
@@ -50,7 +50,7 @@ export default function ModpackCard({
     return () => {
       cancelled = true
     }
-  }, [manifest.location, manifest.name])
+  }, [manifest.location, manifest.name, manifest.logo])
 
   const modLoader = detectModLoader(manifest)
 
@@ -158,4 +158,13 @@ export default function ModpackCard({
       </div>
     </div>
   )
-}
+}, (prev, next) =>
+  prev.manifest === next.manifest &&
+  prev.isInstalled === next.isInstalled &&
+  prev.isRunning === next.isRunning &&
+  prev.hasUpdate === next.hasUpdate &&
+  prev.isNew === next.isNew &&
+  prev.onInstall === next.onInstall &&
+  prev.onPlay === next.onPlay &&
+  prev.onContextMenu === next.onContextMenu
+)

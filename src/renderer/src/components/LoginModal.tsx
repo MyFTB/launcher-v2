@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 interface LoginModalProps {
   onClose: () => void
@@ -9,10 +9,12 @@ type LoginState = 'idle' | 'waiting' | 'error'
 export default function LoginModal({ onClose }: LoginModalProps) {
   const [loginState, setLoginState] = useState<LoginState>('idle')
   const [errorMessage, setErrorMessage] = useState<string>('')
+  const onCloseRef = useRef(onClose)
+  useEffect(() => { onCloseRef.current = onClose }, [onClose])
 
   useEffect(() => {
     const unsubProfiles = window.electronAPI.on('auth:profiles-updated', () => {
-      onClose()
+      onCloseRef.current()
     })
     const unsubError = window.electronAPI.on('auth:login-error', (...args: unknown[]) => {
       const event = args[0] as { error: string }
@@ -23,7 +25,7 @@ export default function LoginModal({ onClose }: LoginModalProps) {
       unsubProfiles()
       unsubError()
     }
-  }, [onClose])
+  }, [])
 
   async function handleMicrosoftLogin(): Promise<void> {
     setLoginState('waiting')

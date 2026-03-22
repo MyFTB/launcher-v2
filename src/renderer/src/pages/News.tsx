@@ -110,8 +110,7 @@ export default function News() {
       ) : (
         <>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {posts.map((post, i) => (
-              <PostCard key={post.url || i} post={post} />
+            {posts.map((post, i) => (<PostCard key={post.url || `post-${i}`} post={post} />
             ))}
           </div>
           <div className="mt-8 flex justify-center">

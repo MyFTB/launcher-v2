@@ -15,15 +15,17 @@ interface ContextMenuProps {
 
 export default function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null)
+  const onCloseRef = useRef(onClose)
+  useEffect(() => { onCloseRef.current = onClose }, [onClose])
 
   useEffect(() => {
     function handleClick(e: MouseEvent): void {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        onClose()
+        onCloseRef.current()
       }
     }
     function handleKeyDown(e: KeyboardEvent): void {
-      if (e.key === 'Escape') onClose()
+      if (e.key === 'Escape') onCloseRef.current()
     }
     document.addEventListener('mousedown', handleClick)
     document.addEventListener('keydown', handleKeyDown)
@@ -31,7 +33,7 @@ export default function ContextMenu({ x, y, items, onClose }: ContextMenuProps) 
       document.removeEventListener('mousedown', handleClick)
       document.removeEventListener('keydown', handleKeyDown)
     }
-  }, [onClose])
+  }, [])
 
   // Constrain to viewport
   const menuWidth = 200

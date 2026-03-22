@@ -1,5 +1,5 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { LaunchState } from '@shared/types'
 import Sidebar from './components/Sidebar'
 import TitleBar from './components/TitleBar'
@@ -44,11 +44,39 @@ function DetachIcon() {
 const MIN_DRAWER_HEIGHT = 120
 const MAX_DRAWER_RATIO = 0.85
 
+/** Floating action button that shows the console open toggle.
+ *  Owns `isGameActive` state so launch events don't re-render the whole App. */
+function GameFAB({ consoleOpen, onOpen }: { consoleOpen: boolean; onOpen: () => void }) {
+  const [isGameActive, setIsGameActive] = useState(false)
+
+  useEffect(() => {
+    const unsub = window.electronAPI.on('launch:state', (...args: unknown[]) => {
+      const event = args[0] as { state: LaunchState }
+      setIsGameActive(event.state === 'launching' || event.state === 'running')
+    })
+    return unsub
+  }, [])
+
+  if (consoleOpen) return null
+
+  return (
+    <button
+      onClick={onOpen}
+      className={`absolute bottom-4 right-4 w-11 h-11 rounded-full flex items-center justify-center shadow-lg transition-all duration-200 ease-out no-drag z-10 bg-bg-overlay text-text-secondary hover:bg-bg-elevated hover:text-text-primary hover:scale-105 hover:border-border-focus/40 active:scale-95 border border-border ${isGameActive ? 'hover:shadow-[0_0_20px_rgba(131,218,56,0.25)]' : ''}`}
+      title="Konsole öffnen"
+    >
+      <TerminalIcon />
+      {isGameActive && (
+        <span className="absolute top-0.5 right-0.5 w-2.5 h-2.5 rounded-full bg-accent border-2 border-bg-base animate-pulse" />
+      )}
+    </button>
+  )
+}
+
 export default function App() {
   const [consoleOpen, setConsoleOpen] = useState(false)
   const [drawerHeight, setDrawerHeight] = useState(300)
   const [isDragging, setIsDragging] = useState(false)
-  const [isGameActive, setIsGameActive] = useState(false)
   const drawerRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<{ startY: number; startH: number } | null>(null)
 
@@ -82,14 +110,7 @@ export default function App() {
     return () => window.removeEventListener('open-console', handler)
   }, [])
 
-  // Track running game for FAB indicator
-  useEffect(() => {
-    const unsub = window.electronAPI.on('launch:state', (...args: unknown[]) => {
-      const event = args[0] as { state: LaunchState }
-      setIsGameActive(event.state === 'launching' || event.state === 'running')
-    })
-    return unsub
-  }, [])
+  // Track running game for FAB indicator — moved to GameFAB component
 
   // Resize drag logic — state-driven so React re-renders never snap back to stale height
   useEffect(() => {
@@ -112,10 +133,12 @@ export default function App() {
     }
   }, [])
 
-  function handleDetach(): void {
+  const handleDetach = useCallback((): void => {
     window.electronAPI.windowOpenConsole().catch(console.error)
     setConsoleOpen(false)
-  }
+  }, [])
+
+  const handleOpenConsole = useCallback((): void => setConsoleOpen(true), [])
 
   return (
     <div className="flex flex-col h-full bg-bg-base text-text-primary overflow-hidden">
@@ -182,19 +205,8 @@ export default function App() {
             <Console />
           </div>
 
-          {/* Floating console toggle button — hidden when drawer is open */}
-          {!consoleOpen && (
-            <button
-              onClick={() => setConsoleOpen(true)}
-              className={`absolute bottom-4 right-4 w-11 h-11 rounded-full flex items-center justify-center shadow-lg transition-all duration-200 ease-out no-drag z-10 bg-bg-overlay text-text-secondary hover:bg-bg-elevated hover:text-text-primary hover:scale-105 hover:border-border-focus/40 active:scale-95 border border-border ${isGameActive ? 'hover:shadow-[0_0_20px_rgba(131,218,56,0.25)]' : ''}`}
-              title="Konsole öffnen"
-            >
-              <TerminalIcon />
-              {isGameActive && (
-                <span className="absolute top-0.5 right-0.5 w-2.5 h-2.5 rounded-full bg-accent border-2 border-bg-base animate-pulse" />
-              )}
-            </button>
-          )}
+          {/* Floating console toggle — game-active state managed inside GameFAB */}
+          <GameFAB consoleOpen={consoleOpen} onOpen={handleOpenConsole} />
         </main>
       </div>
     </div>

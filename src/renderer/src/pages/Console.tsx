@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
-import type { ReactNode } from 'react'
+import { memo, useEffect, useRef, useState, useCallback, useMemo } from 'react'
+import type { ReactNode, RefObject } from 'react'
 import type { LaunchState } from '@shared/types'
 
 interface LogLine {
@@ -56,6 +56,25 @@ function highlightMatches(text: string, term: string): ReactNode {
   if (cursor < text.length) nodes.push(text.slice(cursor))
   return nodes
 }
+
+/** Single log line — memoized so navigating between search matches only re-renders 2 rows. */
+interface LogLineRowProps {
+  line: LogLine
+  filterText: string
+  isCurrentMatch: boolean
+  currentMatchRef: RefObject<HTMLDivElement | null>
+}
+
+const LogLineRow = memo(function LogLineRow({ line, filterText, isCurrentMatch, currentMatchRef }: LogLineRowProps) {
+  return (
+    <div
+      ref={isCurrentMatch ? currentMatchRef : undefined}
+      className={`leading-5 break-all whitespace-pre-wrap ${levelClass(line.level)} ${isCurrentMatch ? 'bg-bg-elevated -mx-4 px-4' : ''}`}
+    >
+      {filterText ? highlightMatches(line.text, filterText) : line.text}
+    </div>
+  )
+})
 
 export default function Console() {
   const [lines, setLines] = useState<LogLine[]>([])
@@ -202,32 +221,6 @@ export default function Console() {
 
   const isRunning = launchState === 'running' || launchState === 'launching'
   const safeMatchIndex = filteredLines.length > 0 ? Math.min(matchIndex, filteredLines.length - 1) : 0
-
-  // Memoize line elements so onScroll (setAutoScroll) doesn't recreate 5000 elements per event
-  const renderedLines = useMemo(() => {
-    if (lines.length === 0) {
-      return (
-        <div className="flex flex-col items-center justify-center h-full gap-2 select-none">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="w-8 h-8 text-text-muted">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 7.5l3 2.25-3 2.25m4.5 0h3m-9 8.25h13.5A2.25 2.25 0 0021 18V6a2.25 2.25 0 00-2.25-2.25H5.25A2.25 2.25 0 003 6v12a2.25 2.25 0 002.25 2.25z" />
-          </svg>
-          <p className="text-xs text-text-muted">Kein Log-Output vorhanden.</p>
-        </div>
-      )
-    }
-    return lines.map((line) => {
-      const isCurrentMatch = filterText.trim() ? filteredLines[safeMatchIndex]?.id === line.id : false
-      return (
-        <div
-          key={line.id}
-          ref={isCurrentMatch ? currentMatchRef : undefined}
-          className={`leading-5 break-all whitespace-pre-wrap ${levelClass(line.level)} ${isCurrentMatch ? 'bg-bg-elevated -mx-4 px-4' : ''}`}
-        >
-          {filterText ? highlightMatches(line.text, filterText) : line.text}
-        </div>
-      )
-    })
-  }, [lines, filterText, filteredLines, safeMatchIndex]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="flex flex-col h-full">
@@ -447,7 +440,22 @@ export default function Console() {
             setAutoScroll((prev) => prev === atBottom ? prev : atBottom)
           }}
         >
-          {renderedLines}
+          {lines.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-full gap-2 select-none">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="w-8 h-8 text-text-muted">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 7.5l3 2.25-3 2.25m4.5 0h3m-9 8.25h13.5A2.25 2.25 0 0021 18V6a2.25 2.25 0 00-2.25-2.25H5.25A2.25 2.25 0 003 6v12a2.25 2.25 0 002.25 2.25z" />
+              </svg>
+              <p className="text-xs text-text-muted">Kein Log-Output vorhanden.</p>
+            </div>
+          ) : lines.map((line) => (
+            <LogLineRow
+              key={line.id}
+              line={line}
+              filterText={filterText}
+              isCurrentMatch={filterText.trim() ? filteredLines[safeMatchIndex]?.id === line.id : false}
+              currentMatchRef={currentMatchRef}
+            />
+          ))}
         </div>
 
         {/* Scroll-to-bottom button — shown when not following */}

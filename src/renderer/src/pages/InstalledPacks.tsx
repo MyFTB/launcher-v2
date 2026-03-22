@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import type { ModpackManifestReference, LaunchState } from '@shared/types'
 import ModpackCard from '../components/ModpackCard'
 import ContextMenu from '../components/ContextMenu'
@@ -107,7 +107,11 @@ export default function InstalledPacks() {
     }
   }, [])
 
-  function buildContextMenuItems(packName: string): Array<{ label: string; action: () => void; danger?: boolean }> {
+  const handleContextMenuClose = useCallback(() => setContextMenu(null), [])
+
+  const contextMenuItems = useMemo(() => {
+    if (!contextMenu) return []
+    const { packName } = contextMenu
     return [
       {
         label: 'Ordner öffnen',
@@ -131,7 +135,7 @@ export default function InstalledPacks() {
         action: () => handleDelete(packName),
       },
     ]
-  }
+  }, [contextMenu?.packName, handleUploadCrash, handleDelete])
 
   const isGameRunning = launchState === 'running' || launchState === 'launching'
   const updateCount = Object.values(updateMap).filter(Boolean).length
@@ -242,8 +246,8 @@ export default function InstalledPacks() {
         <ContextMenu
           x={contextMenu.x}
           y={contextMenu.y}
-          items={buildContextMenuItems(contextMenu.packName)}
-          onClose={() => setContextMenu(null)}
+          items={contextMenuItems}
+          onClose={handleContextMenuClose}
         />
       )}
     </div>

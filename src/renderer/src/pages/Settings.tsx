@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef, KeyboardEvent } from 'react'
+import { memo, useEffect, useState, useCallback, useRef, useMemo, KeyboardEvent } from 'react'
 import type { LauncherConfig, SystemInfoResult, LauncherProfile } from '@shared/types'
 import LoginModal from '../components/LoginModal'
 
@@ -153,6 +153,15 @@ export default function Settings() {
   const [profiles, setProfiles] = useState<LauncherProfile[]>([])
   const [selectedUuid, setSelectedUuid] = useState<string | undefined>(undefined)
   const [showLogin, setShowLogin] = useState(false)
+  const saveSuccessTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const formRef = useRef(form)
+  useEffect(() => { formRef.current = form }, [form])
+
+  useEffect(() => {
+    return () => {
+      if (saveSuccessTimeoutRef.current) clearTimeout(saveSuccessTimeoutRef.current)
+    }
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -197,7 +206,10 @@ export default function Settings() {
     await window.electronAPI.authSwitchProfile(uuid).catch(console.error)
   }, [])
 
-  const isDirty = original !== null && JSON.stringify(form) !== JSON.stringify(original)
+  const isDirty = useMemo(
+    () => original !== null && JSON.stringify(form) !== JSON.stringify(original),
+    [form, original]
+  )
 
   const handlePickDir = useCallback(async () => {
     const dir = await window.electronAPI.configPickDir()
@@ -205,25 +217,28 @@ export default function Settings() {
   }, [])
 
   const handleSave = useCallback(async () => {
+    const snapshot = formRef.current
     setSaving(true)
     setError(null)
     try {
-      await window.electronAPI.configSave(form)
-      setOriginal(form)
+      await window.electronAPI.configSave(snapshot)
+      setOriginal(snapshot)
       setSaveSuccess(true)
-      setTimeout(() => setSaveSuccess(false), 2000)
+      if (saveSuccessTimeoutRef.current) clearTimeout(saveSuccessTimeoutRef.current)
+      saveSuccessTimeoutRef.current = setTimeout(() => setSaveSuccess(false), 2000)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Fehler beim Speichern')
     } finally {
       setSaving(false)
     }
-  }, [form])
+  }, [])
 
   function update<K extends keyof FormState>(key: K, value: FormState[K]): void {
     setForm((prev) => ({ ...prev, [key]: value }))
   }
 
   const maxMemoryMb = computeMaxMemoryMb(systemInfo?.totalMemoryMb)
+  const memoryLandmarks = useMemo(() => buildLandmarks(maxMemoryMb), [maxMemoryMb])
 
   function clampMemory(mb: number, lo: number, hi: number): number {
     return Math.max(lo, Math.min(hi, Math.round(mb / 1024) * 1024))
@@ -445,7 +460,7 @@ export default function Settings() {
             onChange={(e) => update('maxMemory', parseInt(e.target.value))}
           />
           <div className="flex justify-between text-xs text-text-muted mt-1">
-            {buildLandmarks(maxMemoryMb).map((v) => (
+            {memoryLandmarks.map((v) => (
               <span key={v}>{memLabel(v)}</span>
             ))}
           </div>
@@ -487,7 +502,7 @@ export default function Settings() {
             onChange={(e) => update('minMemory', parseInt(e.target.value))}
           />
           <div className="flex justify-between text-xs text-text-muted mt-1">
-            {buildLandmarks(maxMemoryMb).map((v) => (
+            {memoryLandmarks.map((v) => (
               <span key={v}>{memLabel(v)}</span>
             ))}
           </div>
@@ -589,7 +604,7 @@ export default function Settings() {
 )
 }
 
-function PlayerAvatar({ uuid, username }: { uuid: string; username: string }) {
+const PlayerAvatar = memo(function PlayerAvatar({ uuid, username }: { uuid: string; username: string }) {
   const [failed, setFailed] = useState(false)
   if (failed) {
     return (
@@ -603,10 +618,13 @@ function PlayerAvatar({ uuid, username }: { uuid: string; username: string }) {
       src={`https://mc-heads.net/avatar/${uuid}/32`}
       alt={username}
       className="w-8 h-8 rounded flex-shrink-0"
+      width="32"
+      height="32"
+      loading="lazy"
       onError={() => setFailed(true)}
     />
   )
-}
+})
 
 function MicrosoftIcon() {
   return (

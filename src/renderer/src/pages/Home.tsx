@@ -1,8 +1,8 @@
-import { useEffect, useState, useRef } from 'react'
+import { memo, useEffect, useState, useRef, useCallback } from 'react'
 import type { ModpackManifestReference, LauncherProfile } from '@shared/types'
 import { useNavigate } from 'react-router-dom'
 
-function RecentPackCard({ pack, onPlay }: { pack: ModpackManifestReference; onPlay: () => void }) {
+const RecentPackCard = memo(function RecentPackCard({ pack, onPlay }: { pack: ModpackManifestReference; onPlay: (name: string) => void }) {
   const [logoUrl, setLogoUrl] = useState<string | null>(null)
 
   useEffect(() => {
@@ -11,7 +11,7 @@ function RecentPackCard({ pack, onPlay }: { pack: ModpackManifestReference; onPl
       if (!cancelled && url) setLogoUrl(url)
     }).catch(() => {})
     return () => { cancelled = true }
-  }, [pack.location, pack.name])
+  }, [pack.location, pack.name, pack.logo])
 
   return (
     <div className="card-interactive flex items-center gap-4 p-4 group">
@@ -34,13 +34,13 @@ function RecentPackCard({ pack, onPlay }: { pack: ModpackManifestReference; onPl
       </div>
       <button
         className="btn-primary px-4 opacity-0 group-hover:opacity-100 transition-opacity duration-150"
-        onClick={onPlay}
+        onClick={() => onPlay(pack.name)}
       >
         Spielen
       </button>
     </div>
   )
-}
+})
 
 export default function Home() {
   const navigate = useNavigate()
@@ -117,10 +117,10 @@ export default function Home() {
     load()
   }, [])
 
-  function handlePlayPack(packName: string): void {
+  const handlePlayPack = useCallback((packName: string): void => {
     window.electronAPI.launchStart(packName).catch(console.error)
     navigate('/installed')
-  }
+  }, [navigate])
 
   return (
     <div className="p-6 max-w-3xl mx-auto animate-fade-in">
@@ -155,6 +155,9 @@ export default function Home() {
                           src={`https://mc-heads.net/avatar/${p.uuid}/28`}
                           alt={p.lastKnownUsername}
                           className="w-7 h-7 rounded flex-shrink-0"
+                          width="28"
+                          height="28"
+                          loading="lazy"
                         />
                         <span className="text-sm text-text-primary flex-1 truncate">{p.lastKnownUsername}</span>
                         {p.uuid === selectedUuid && (
@@ -235,7 +238,7 @@ export default function Home() {
               <RecentPackCard
                 key={pack.name}
                 pack={pack}
-                onPlay={() => handlePlayPack(pack.name)}
+                onPlay={handlePlayPack}
               />
             ))}
           </div>

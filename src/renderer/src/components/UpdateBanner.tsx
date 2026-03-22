@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import type {
   UpdateAvailableEvent,
   UpdateProgressEvent,
@@ -21,6 +21,13 @@ function formatSpeed(bps: number): string {
 export default function UpdateBanner() {
   const [state, setState] = useState<UpdateState>({ status: 'idle' })
   const [dismissed, setDismissed] = useState(false)
+  const errorTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (errorTimeoutRef.current) clearTimeout(errorTimeoutRef.current)
+    }
+  }, [])
 
   useEffect(() => {
     const unsubAvailable = window.electronAPI.on('update:available', (...args: unknown[]) => {
@@ -43,7 +50,8 @@ export default function UpdateBanner() {
     const unsubError = window.electronAPI.on('update:error', (...args: unknown[]) => {
       const event = args[0] as UpdateErrorEvent
       setState({ status: 'error', message: event.message })
-      setTimeout(() => setState({ status: 'idle' }), 6000)
+      if (errorTimeoutRef.current) clearTimeout(errorTimeoutRef.current)
+      errorTimeoutRef.current = setTimeout(() => setState({ status: 'idle' }), 6000)
     })
 
     return () => {

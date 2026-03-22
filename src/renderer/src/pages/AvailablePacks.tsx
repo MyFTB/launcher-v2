@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import type {
   ModpackManifestReference,
   InstallProgressEvent,
@@ -93,13 +93,18 @@ export default function AvailablePacks() {
   }, [loadPacks])
 
   // Subscribe to install events
+  const installingPackRef = useRef(installingPack)
+  useEffect(() => {
+    installingPackRef.current = installingPack
+  }, [installingPack])
+
   useEffect(() => {
     const unsubProgress = window.electronAPI.on('install:progress', (...args: unknown[]) => {
       setInstallProgress(args[0] as InstallProgressEvent)
     })
     const unsubComplete = window.electronAPI.on('install:complete', (...args: unknown[]) => {
       const event = args[0] as { success: boolean; error?: string }
-      if (event.success && installingPack) {
+      if (event.success && installingPackRef.current) {
         window.electronAPI.installGetInstalled()
           .then((infos) => setInstalledNames(new Set(infos.map((p) => p.name))))
           .catch(() => {})
@@ -109,8 +114,8 @@ export default function AvailablePacks() {
     })
     const unsubFeatures = window.electronAPI.on('install:needs-features', (...args: unknown[]) => {
       const event = args[0] as { features: Feature[] }
-      if (installingPack) {
-        setPendingFeaturesPack(installingPack)
+      if (installingPackRef.current) {
+        setPendingFeaturesPack(installingPackRef.current)
         setPendingFeatures(event.features)
         setInstallingPack(null)
         setInstallProgress(null)
@@ -121,7 +126,7 @@ export default function AvailablePacks() {
       unsubComplete()
       unsubFeatures()
     }
-  }, [installingPack])
+  }, [])
 
   const handleInstall = useCallback((pack: ModpackManifestReference) => {
     setInstallingPack(pack)
@@ -163,17 +168,20 @@ export default function AvailablePacks() {
     setPendingFeatures([])
   }, [])
 
-  const filteredPacks = remotePacks
-    .filter(
-      (p) => !installedNames.has(p.name) &&
-        p.title.toLowerCase().includes(search.toLowerCase())
-    )
-    .sort((a, b) => {
-      const aNew = newPackNames.has(a.name)
-      const bNew = newPackNames.has(b.name)
-      if (aNew === bNew) return 0
-      return aNew ? -1 : 1
-    })
+  const filteredPacks = useMemo(() =>
+    remotePacks
+      .filter(
+        (p) => !installedNames.has(p.name) &&
+          p.title.toLowerCase().includes(search.toLowerCase())
+      )
+      .sort((a, b) => {
+        const aNew = newPackNames.has(a.name)
+        const bNew = newPackNames.has(b.name)
+        if (aNew === bNew) return 0
+        return aNew ? -1 : 1
+      }),
+    [remotePacks, installedNames, search, newPackNames]
+  )
 
   return (
     <div className="p-6 animate-fade-in">
