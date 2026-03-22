@@ -127,14 +127,7 @@ jobs:
         run: npx electron-builder --mac --publish always --config.publish.channel=${{ needs.resolve-channel.outputs.channel }}
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-          # Disable keychain auto-discovery when no certificate is configured;
-          # prevents electron-builder from treating the workspace path as a cert file.
-          CSC_IDENTITY_AUTO_DISCOVERY: ${{ secrets.CSC_LINK != '' && 'true' || 'false' }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
   # ----------------------------------------------------------------------------
 
