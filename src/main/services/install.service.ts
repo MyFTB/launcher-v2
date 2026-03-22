@@ -381,7 +381,7 @@ class InstallService {
       const neoVersionJsonPath = path.join(neoVersionDir, `${neoVersionId}.json`)
       await fs.mkdir(neoVersionDir, { recursive: true })
       try {
-        // CodeQL[js/network-data-written-to-file]: versionManifest from trusted packs.myftb.de, intentionally written to Minecraft dir
+        // CodeQL[js/http-to-file-access]: versionManifest from trusted packs.myftb.de, intentionally written to Minecraft dir
         await fs.writeFile(neoVersionJsonPath, JSON.stringify(manifest.versionManifest), { encoding: 'utf8', flag: 'wx' })
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
@@ -419,7 +419,7 @@ class InstallService {
       const versionJsonPath = path.join(versionDir, `${versionId}.json`)
       await fs.mkdir(versionDir, { recursive: true })
       try {
-        // CodeQL[js/network-data-written-to-file]: versionManifest from trusted packs.myftb.de, intentionally written to Minecraft dir
+        // CodeQL[js/http-to-file-access]: versionManifest from trusted packs.myftb.de, intentionally written to Minecraft dir
         await fs.writeFile(versionJsonPath, JSON.stringify(manifest.versionManifest), { encoding: 'utf8', flag: 'wx' })
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
@@ -560,7 +560,7 @@ class InstallService {
     }
 
     // ── f. Save manifest ──────────────────────────────────────────────────────
-    // CodeQL[js/network-data-written-to-file]: pack manifest from trusted packs.myftb.de, intentionally persisted to track installed state
+    // CodeQL[js/http-to-file-access]: pack manifest from trusted packs.myftb.de, intentionally persisted to track installed state
     await fs.writeFile(manifestFilePath, JSON.stringify(manifest, null, 2), 'utf8')
 
     signal.throwIfAborted()

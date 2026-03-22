@@ -223,7 +223,7 @@ class ModpackApiService {
           const response = await fetchWithTimeout(imageUrl)
           const arrayBuffer = await response.arrayBuffer()
           const buffer = Buffer.from(arrayBuffer)
-          // CodeQL[js/network-data-written-to-file]: pack logo fetched from trusted packs.myftb.de, intentionally cached to disk
+          // CodeQL[js/http-to-file-access]: pack logo fetched from trusted packs.myftb.de, intentionally cached to disk
           await fs.writeFile(cachePath, buffer)
           return `data:image/png;base64,${buffer.toString('base64')}`
         } catch (err) {
