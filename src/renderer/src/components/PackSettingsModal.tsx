@@ -137,13 +137,13 @@ export default function PackSettingsModal({ packName, packTitle, onClose }: Pack
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fade-in"
       onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
     >
-      <div className="bg-bg-surface border border-border rounded-xl shadow-2xl w-full max-w-md mx-4 flex flex-col overflow-hidden">
+      <div className="bg-bg-surface border border-border rounded-xl shadow-2xl w-full max-w-lg mx-4 flex flex-col overflow-hidden">
 
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-border">
           <div>
-            <h2 className="text-sm font-semibold text-text-primary">Pack-Einstellungen</h2>
-            <p className="text-xs text-text-muted mt-0.5 truncate max-w-xs">{packTitle}</p>
+            <h2 className="text-base font-semibold text-text-primary">Pack-Einstellungen</h2>
+            <p className="text-sm text-text-muted mt-0.5 truncate max-w-xs">{packTitle}</p>
           </div>
           <button
             className="p-1.5 rounded-lg text-text-muted hover:text-text-primary hover:bg-bg-elevated transition-colors"
@@ -156,7 +156,7 @@ export default function PackSettingsModal({ packName, packTitle, onClose }: Pack
         </div>
 
         {/* Body */}
-        <div className="p-5 space-y-5 overflow-y-auto">
+        <div className="p-6 space-y-5 overflow-y-auto">
           {loading ? (
             <div className="flex items-center justify-center py-8">
               <div className="w-6 h-6 rounded-full border-2 border-accent border-t-transparent animate-spin" />
@@ -165,7 +165,7 @@ export default function PackSettingsModal({ packName, packTitle, onClose }: Pack
             <>
               {/* Override notice */}
               {hasOverride && (
-                <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-accent/10 border border-accent/25 text-xs text-accent">
+                <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-accent/10 border border-accent/25 text-sm text-accent">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-3.5 h-3.5 shrink-0">
                     <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
@@ -173,19 +173,19 @@ export default function PackSettingsModal({ packName, packTitle, onClose }: Pack
                 </div>
               )}
               {!hasOverride && globalConfig && (
-                <p className="text-xs text-text-muted">
+                <p className="text-sm text-text-muted">
                   Momentan werden die globalen Standardwerte verwendet. Ändere die Werte unten, um Pack-spezifische Einstellungen festzulegen.
                 </p>
               )}
 
               {/* JVM Args */}
               <div>
-                <label className="block text-xs font-medium text-text-secondary mb-1.5">
+                <label className="block text-sm font-medium text-text-secondary mb-1.5">
                   Zusätzliche JVM-Argumente
                 </label>
                 <input
                   type="text"
-                  className="input font-mono text-xs"
+                  className="input font-mono text-sm"
                   placeholder="-XX:+UseG1GC -Xss1m"
                   value={jvmArgs}
                   onChange={(e) => { setRemoveOnSave(false); setJvmArgs(e.target.value) }}
@@ -210,7 +210,7 @@ export default function PackSettingsModal({ packName, packTitle, onClose }: Pack
                 </div>
 
                 <div className="flex items-center justify-between mb-1.5">
-                  <label className="text-xs font-medium text-text-secondary">
+                  <label className="text-sm font-medium text-text-secondary">
                     Maximaler Arbeitsspeicher
                   </label>
                   <div className="flex items-center gap-2">
@@ -244,7 +244,7 @@ export default function PackSettingsModal({ packName, packTitle, onClose }: Pack
               {/* Min Memory */}
               <div>
                 <div className="flex items-center justify-between mb-1.5">
-                  <label className="text-xs font-medium text-text-secondary">
+                  <label className="text-sm font-medium text-text-secondary">
                     Minimaler Arbeitsspeicher
                   </label>
                   <div className="flex items-center gap-2">
@@ -260,7 +260,7 @@ export default function PackSettingsModal({ packName, packTitle, onClose }: Pack
                     <span className="text-sm text-text-secondary">MB</span>
                   </div>
                 </div>
-                <p className={`text-xs text-yellow-400 mb-1.5 transition-opacity duration-200 ${minMemory > maxMemory ? 'opacity-100' : 'opacity-0'}`}>
+                <p className={`text-sm text-yellow-400 mb-1.5 transition-opacity duration-200 ${minMemory > maxMemory ? 'opacity-100' : 'opacity-0'}`}>
                   ⚠ Minimaler Arbeitsspeicher ist größer als der maximale.
                 </p>
                 <ThumbLabel value={minMemory} min={MINECRAFT_MIN_MB} max={maxMemoryMb} />
@@ -283,11 +283,11 @@ export default function PackSettingsModal({ packName, packTitle, onClose }: Pack
 
         {/* Footer */}
         {!loading && (
-          <div className="flex items-center justify-between px-5 py-4 border-t border-border gap-3">
+          <div className="flex items-center justify-between px-6 py-4 border-t border-border gap-3">
             {/* Reset button — only shown when there's an active override */}
             {hasOverride ? (
               <button
-                className="text-xs text-text-muted hover:text-red-400 transition-colors"
+                className="text-sm text-text-muted hover:text-red-400 transition-colors"
                 onClick={handleReset}
                 disabled={saving}
               >
