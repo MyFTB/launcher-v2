@@ -410,7 +410,6 @@ class InstallService {
         currentFile: `Installing NeoForge ${neoforgeVersion}...`,
       } satisfies InstallProgressEvent)
 
-      logger.info(`[InstallService] Installing NeoForge ${neoforgeVersion}...`)
       await installNeoForged('neoforge', neoforgeVersion, minecraftDir, { java: javaPath })
 
       // installNeoForged creates the version JSON under the installer's own ID
@@ -482,7 +481,6 @@ class InstallService {
     } satisfies InstallProgressEvent)
 
     const resolvedVersion = await Version.parse(minecraftDir, manifest.versionManifest.id)
-    logger.info(`[InstallService] Installing libraries and assets...`)
     await installResolvedLibraries(resolvedVersion.libraries, minecraftDir)
     await installAssets(resolvedVersion)
 
