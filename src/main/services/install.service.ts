@@ -179,6 +179,34 @@ function buildForgeEntry(
 }
 
 /**
+ * Convert an unknown thrown value into a human-readable error string.
+ *
+ * `@xmcl/file-transfer` throws `AggregateError` for download failures.
+ * Its own `.message` is always empty — the real information lives in
+ * `err.errors[]`.  We extract the first meaningful child message so the
+ * user sees something actionable instead of the bare constructor name.
+ *
+ * Exported for unit testing.
+ */
+export function formatInstallError(err: unknown): string {
+  if (err instanceof AggregateError) {
+    const childMessages = err.errors
+      .map((e) => (e instanceof Error ? e.message || e.constructor.name : String(e)))
+      .filter(Boolean)
+    if (childMessages.length > 0) {
+      // Show the first error; if there are more, append a count.
+      const first = childMessages[0]
+      return childMessages.length === 1 ? first : `${first} (+${childMessages.length - 1} more)`
+    }
+    return 'AggregateError'
+  }
+  if (err instanceof Error) {
+    return err.message || err.constructor.name || 'Unknown error'
+  }
+  return String(err) || 'Unknown error'
+}
+
+/**
  * Send a push event to the renderer window (fire-and-forget).
  */
 function pushEvent(channel: string, payload: unknown): void {
@@ -269,10 +297,7 @@ class InstallService {
         pushEvent(IpcChannels.INSTALL_COMPLETE, complete)
       } else {
         console.error('[InstallService] Install failed:', err)
-        const message = err instanceof Error
-          ? (err.message || err.constructor.name || 'Unknown error')
-          : String(err) || 'Unknown error'
-        const complete: InstallCompleteEvent = { success: false, error: message }
+        const complete: InstallCompleteEvent = { success: false, error: formatInstallError(err) }
         pushEvent(IpcChannels.INSTALL_COMPLETE, complete)
       }
     } finally {
