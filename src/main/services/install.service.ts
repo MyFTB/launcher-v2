@@ -511,7 +511,7 @@ class InstallService {
 
     const isUpdate = oldManifest !== null
     logger.info(
-      `[InstallService] ${isUpdate ? `Updating ${manifest.name} (${oldManifest!.version} → ${manifest.version})` : `First install of ${manifest.name} v${manifest.version}`} — ${tasks.length} file(s)`,
+      `[InstallService] ${isUpdate ? `Updating ${manifest.name} (${oldManifest!.version} -> ${manifest.version})` : `First install of ${manifest.name} v${manifest.version}`} - ${tasks.length} file(s)`,
     )
 
     pushEvent(IpcChannels.INSTALL_PROGRESS, {

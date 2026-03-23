@@ -94,7 +94,7 @@ app.whenReady().then(async () => {
   await configService.load()
   const _cfg = configService.get()
   logger.info(
-    `[Launcher] installDir: ${configService.getInstallDir()} | mem: ${_cfg.minMemory}–${_cfg.maxMemory} MB`
+    `[Launcher] installDir: ${configService.getInstallDir()} | mem: ${_cfg.minMemory}-${_cfg.maxMemory} MB`
   )
 
   // Register all IPC handlers

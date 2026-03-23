@@ -29,7 +29,7 @@ async function fetchWithTimeout(url: string): Promise<Response> {
   try {
     const response = await fetch(url, { signal: controller.signal })
     if (!response.ok) {
-      throw new Error(`HTTP ${response.status} ${response.statusText} — ${url}`)
+      throw new Error(`HTTP ${response.status} ${response.statusText} - ${url}`)
     }
     return response
   } finally {

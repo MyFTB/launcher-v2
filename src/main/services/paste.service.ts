@@ -43,7 +43,7 @@ class PasteService {
 
     if (!response.ok) {
       throw new Error(
-        `[PasteService] Upload failed — HTTP ${response.status} ${response.statusText} (${endpoint})`,
+        `[PasteService] Upload failed - HTTP ${response.status} ${response.statusText} (${endpoint})`,
       )
     }
 
