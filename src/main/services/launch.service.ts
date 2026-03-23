@@ -335,6 +335,9 @@ class LaunchService {
           javaPath,
           launcherName: 'MyFTBLauncher',
           launcherBrand: 'MyFTBLauncher',
+          // detached: true moves the child to its own process group so it is
+          // not killed when the launcher window closes (Windows Job Object).
+          extraExecOption: { detached: true },
         }
 
         // ── 6. Emit launching state ───────────────────────────────────────────
