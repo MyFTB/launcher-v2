@@ -240,6 +240,7 @@ export default function InstalledPacks() {
               isRunning={runningPack === pack.name}
               hasUpdate={updateMap[pack.name]}
               onPlay={() => handlePlay(pack.name)}
+              onUpdate={() => handleUpdate(pack)}
               onContextMenu={(e) => handleContextMenu(e, pack.name)}
             />
             </div>

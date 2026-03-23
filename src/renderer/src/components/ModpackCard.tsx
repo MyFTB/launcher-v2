@@ -9,6 +9,7 @@ interface ModpackCardProps {
   isNew?: boolean
   onInstall?: () => void
   onPlay?: () => void
+  onUpdate?: () => void
   onContextMenu?: (e: React.MouseEvent) => void
 }
 
@@ -35,6 +36,7 @@ export default memo(function ModpackCard({
   isNew,
   onInstall,
   onPlay,
+  onUpdate,
   onContextMenu,
 }: ModpackCardProps) {
   const [logoUrl, setLogoUrl] = useState<string | null>(null)
@@ -102,16 +104,29 @@ export default memo(function ModpackCard({
           className="absolute inset-0 flex items-center justify-center bg-black/50 backdrop-blur-[2px] transition-opacity duration-200 opacity-0 group-hover:opacity-100"
         >
           {isInstalled ? (
-            <button
-              className="btn-primary px-6 py-2.5 text-base font-semibold shadow-lg"
-              onClick={(e) => {
-                e.stopPropagation()
-                onPlay?.()
-              }}
-              disabled={isRunning}
-            >
-              {isRunning ? 'Läuft...' : hasUpdate ? 'Aktualisieren' : 'Spielen'}
-            </button>
+            hasUpdate ? (
+              <button
+                className="btn-primary px-6 py-2.5 text-base font-semibold shadow-lg"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onUpdate?.()
+                }}
+                disabled={isRunning}
+              >
+                Aktualisieren
+              </button>
+            ) : (
+              <button
+                className="btn-primary px-6 py-2.5 text-base font-semibold shadow-lg"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onPlay?.()
+                }}
+                disabled={isRunning}
+              >
+                {isRunning ? 'Läuft...' : 'Spielen'}
+              </button>
+            )
           ) : (
             <button
               className="btn-primary px-6 py-2.5 text-base font-semibold shadow-lg"
@@ -166,5 +181,6 @@ export default memo(function ModpackCard({
   prev.isNew === next.isNew &&
   prev.onInstall === next.onInstall &&
   prev.onPlay === next.onPlay &&
+  prev.onUpdate === next.onUpdate &&
   prev.onContextMenu === next.onContextMenu
 )
