@@ -1,6 +1,7 @@
 import { memo, useEffect, useState, useRef, useCallback } from 'react'
 import type { ModpackManifestReference, LauncherProfile } from '@shared/types'
 import { useNavigate } from 'react-router-dom'
+import { useLaunchStore } from '../store/launch.store'
 
 const RecentPackCard = memo(function RecentPackCard({ pack, onPlay }: { pack: ModpackManifestReference; onPlay: (name: string) => void }) {
   const [logoUrl, setLogoUrl] = useState<string | null>(null)
@@ -44,6 +45,7 @@ const RecentPackCard = memo(function RecentPackCard({ pack, onPlay }: { pack: Mo
 
 export default function Home() {
   const navigate = useNavigate()
+  const storeLaunch = useLaunchStore((s) => s.launch)
   const [username, setUsername] = useState<string>('Spieler')
   const [isLoggedIn, setIsLoggedIn] = useState<boolean | null>(null)
   const [profiles, setProfiles] = useState<LauncherProfile[]>([])
@@ -118,9 +120,9 @@ export default function Home() {
   }, [])
 
   const handlePlayPack = useCallback((packName: string): void => {
-    window.electronAPI.launchStart(packName).catch(console.error)
+    storeLaunch(packName).catch(console.error)
     navigate('/installed')
-  }, [navigate])
+  }, [storeLaunch, navigate])
 
   return (
     <div className="p-6 max-w-3xl mx-auto animate-fade-in">
