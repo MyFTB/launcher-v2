@@ -90,7 +90,7 @@ jobs:
       # package.json under build.win.  --publish always uploads artifacts
       # directly to the draft GitHub Release created by the release job.
       - name: Package & publish — Windows
-        run: npx electron-builder --win --publish always --config.publish.channel=${{ needs.resolve-channel.outputs.channel }}
+        run: npx electron-builder --win --publish always
         env:
           # GitHub Releases upload token
           GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
@@ -124,7 +124,7 @@ jobs:
         run: npx electron-vite build
 
       - name: Package & publish — macOS
-        run: npx electron-builder --mac --publish always --config.publish.channel=${{ needs.resolve-channel.outputs.channel }}
+        run: npx electron-builder --mac --publish always
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
@@ -155,7 +155,7 @@ jobs:
       # electron-builder --linux produces AppImage and .deb packages as defined
       # in package.json under build.linux.
       - name: Package & publish — Linux
-        run: npx electron-builder --linux --publish always --config.publish.channel=${{ needs.resolve-channel.outputs.channel }}
+        run: npx electron-builder --linux --publish always
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
 
