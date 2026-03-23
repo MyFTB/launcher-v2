@@ -24,6 +24,7 @@ import { ensureRuntime, resolveJavaPath } from './java.service'
 import { logger } from '../logger'
 import type {
   ModpackManifest,
+  ModpackManifestReference,
   FeatureCondition,
   InstallProgressEvent,
   InstallCompleteEvent,
@@ -627,6 +628,38 @@ class InstallService {
     const success = failed === 0
     const complete: InstallCompleteEvent = { success, error: success ? undefined : `${failed} file(s) failed to download` }
     pushEvent(IpcChannels.INSTALL_COMPLETE, complete)
+  }
+
+  // ── Public install API ────────────────────────────────────────────────────
+
+  /**
+   * Fetch a pack manifest and run the full install, awaiting completion.
+   * Used for silent auto-updates triggered at launch time.
+   * Returns true on success, false on failure.
+   */
+  async installModpack(reference: ModpackManifestReference): Promise<boolean> {
+    const manifestUrl = fmt(Constants.packManifest, reference.location)
+    logger.info(`[InstallService] Auto-update install started: ${reference.name} v${reference.version}`)
+    let manifestRes: Response
+    try {
+      manifestRes = await fetch(manifestUrl, { signal: AbortSignal.timeout(Constants.connectTimeoutMs) })
+    } catch (err) {
+      logger.error(`[InstallService] Auto-update manifest fetch failed for "${reference.name}":`, err)
+      return false
+    }
+    if (!manifestRes.ok) {
+      logger.error(`[InstallService] Auto-update manifest returned ${manifestRes.status} for "${reference.name}"`)
+      return false
+    }
+    const manifest: ModpackManifest = await manifestRes.json() as ModpackManifest
+    try {
+      await this.runInstall(manifest, [])
+      logger.info(`[InstallService] Auto-update complete: ${reference.name} v${reference.version}`)
+      return true
+    } catch (err) {
+      logger.error(`[InstallService] Auto-update failed for "${reference.name}":`, err)
+      return false
+    }
   }
 
   // ── Public query API ──────────────────────────────────────────────────────

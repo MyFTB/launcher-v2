@@ -263,7 +263,7 @@ class LaunchService {
         const remoteRef = await fetchRemoteReference(packName)
         if (remoteRef && remoteRef.version !== manifest.version) {
           logger.info(
-            `[LaunchService] Pack "${packName}" is outdated (local ${manifest.version} → remote ${remoteRef.version}), installing update…`,
+            `[LaunchService] Pack "${packName}" is outdated (local ${manifest.version} -> remote ${remoteRef.version}), installing update...`,
           )
           const success = await installService.installModpack(remoteRef)
           if (!success) {
@@ -291,7 +291,7 @@ class LaunchService {
         if (Object.keys(packOverride).length > 0) {
           logger.info(
             `[LaunchService] Pack overrides for "${packName}": ` +
-            `mem ${effectiveMinMemory}–${effectiveMaxMemory} MB, ` +
+            `mem ${effectiveMinMemory}-${effectiveMaxMemory} MB, ` +
             `jvmArgs: "${effectiveJvmArgs}"`,
           )
         }
@@ -299,7 +299,7 @@ class LaunchService {
         // UUID without dashes (Minecraft auth expectation)
         const uuidNoDashes = profile.uuid.replace(/-/g, '')
 
-        // Extra JVM args from effective config string (pack override → global fallback)
+        // Extra JVM args from effective config string (pack override -> global fallback)
         const extraJVMArgs: string[] = effectiveJvmArgs
           ? effectiveJvmArgs
               .trim()
@@ -327,7 +327,7 @@ class LaunchService {
           version: manifest.versionManifest.id,
           accessToken: profile.minecraftAccessToken,
           gameProfile: { id: uuidNoDashes, name: profile.lastKnownUsername },
-          userType: 'msa' as const,
+          userType: 'msa' as unknown as 'mojang', // @xmcl/core types predate MSA; 'msa' is correct at runtime
           minMemory: effectiveMinMemory,
           maxMemory: effectiveMaxMemory,
           extraJVMArgs,
@@ -340,7 +340,7 @@ class LaunchService {
         // ── 6. Emit launching state ───────────────────────────────────────────
         logger.info(
           `[LaunchService] Starting "${packName}" | MC ${manifest.versionManifest.id}` +
-          ` | Java: ${javaPath} | mem: ${effectiveMinMemory}–${effectiveMaxMemory} MB`,
+          ` | Java: ${javaPath} | mem: ${effectiveMinMemory}-${effectiveMaxMemory} MB`,
         )
         sendState({ state: 'launching' })
 
