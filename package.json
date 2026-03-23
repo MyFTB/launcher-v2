@@ -11,7 +11,7 @@
     "package:win": "npm run build && electron-builder --win",
     "package:mac": "npm run build && electron-builder --mac",
     "package:linux": "npm run build && electron-builder --linux",
-    "type-check": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p src/renderer/tsconfig.json",
+    "type-check": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p src/renderer/tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint src --report-unused-disable-directives --max-warnings 0"
