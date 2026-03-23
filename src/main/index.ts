@@ -80,7 +80,7 @@ app.whenReady().then(async () => {
   // Initialise file logger — must happen after app is ready so getPath('logs') works
   logger.init(app.getPath('logs'))
   logger.captureConsole()  // redirect global console so third-party libs are also logged
-  logger.info(`[Launcher] Starting up — v${app.getVersion()} | ${process.platform} ${process.arch}`)
+  logger.info(`[Launcher] Starting up - v${app.getVersion()} | ${process.platform} ${process.arch}`)
 
   // Register myftb:// deep-link protocol (webstart)
   app.setAsDefaultProtocolClient('myftb')
@@ -121,7 +121,7 @@ app.on('second-instance', (_event, commandLine, _workingDirectory, additionalDat
 
   const deepLink = commandLine.find((arg) => arg.startsWith('myftb://'))
   if (deepLink) {
-    logger.info(`[Launcher] Second instance: deep link received — ${deepLink}`)
+    logger.info(`[Launcher] Second instance: deep link received - ${deepLink}`)
     handleDeepLink(deepLink)
   } else if ((additionalData as { launchPackArg?: string }).launchPackArg) {
     const packName = (additionalData as { launchPackArg: string }).launchPackArg
