@@ -18,6 +18,7 @@ import { configService } from './config.service'
 import { getSelectedProfile } from './auth.service'
 import { installService } from './install.service'
 import { resolveJavaPath } from './java.service'
+import { logger } from '../logger'
 import type {
   LaunchStartPayload,
   LaunchOpenFolderPayload,
@@ -250,6 +251,8 @@ class LaunchService {
           )
         }
 
+        logger.info(`[LaunchService] Launch requested: "${packName}" as ${profile.lastKnownUsername}`)
+
         // ── 2. Load installed manifest ────────────────────────────────────────
         let manifest = await installService.getManifestByName(packName)
         if (!manifest) {
@@ -259,7 +262,7 @@ class LaunchService {
         // ── 3. Outdated check / auto-update ───────────────────────────────────
         const remoteRef = await fetchRemoteReference(packName)
         if (remoteRef && remoteRef.version !== manifest.version) {
-          console.info(
+          logger.info(
             `[LaunchService] Pack "${packName}" is outdated (local ${manifest.version} → remote ${remoteRef.version}), installing update…`,
           )
           const success = await installService.installModpack(remoteRef)
@@ -322,6 +325,10 @@ class LaunchService {
         }
 
         // ── 6. Emit launching state ───────────────────────────────────────────
+        logger.info(
+          `[LaunchService] Starting "${packName}" | MC ${manifest.versionManifest.id}` +
+          ` | Java: ${javaPath} | mem: ${config.minMemory}–${config.maxMemory} MB`,
+        )
         sendState({ state: 'launching' })
 
         // ── 7. Start Minecraft ────────────────────────────────────────────────
@@ -340,6 +347,8 @@ class LaunchService {
         this.childProcess = child
         this.logBuffer.clear()
 
+        logger.info(`[LaunchService] Minecraft process started (PID: ${child.pid ?? 'unknown'})`)
+
         // ── Emit running state & record last-played ───────────────────────────
         sendState({ state: 'running' })
         const prevConfig = configService.get()
@@ -350,7 +359,7 @@ class LaunchService {
           ].slice(0, 10),
         })
         configService.save().catch((err) => {
-          console.error('[LaunchService] Failed to save lastPlayedPacks:', err)
+          logger.error('[LaunchService] Failed to save lastPlayedPacks:', err)
         })
 
         // Discord presence
@@ -379,6 +388,7 @@ class LaunchService {
         // ── 9. Handle process exit ────────────────────────────────────────────
         child.on('close', (exitCode) => {
           const code = exitCode ?? -1
+          logger.info(`[LaunchService] Minecraft exited: code ${code} (${code === 0 ? 'clean exit' : 'crash / forced kill'})`)
           const exitLine = `\nProcess exited with code ${code}`
           this.logBuffer.push(exitLine)
           sendLogLine({ line: exitLine })
@@ -406,6 +416,7 @@ class LaunchService {
   private handleLaunchKill(): void {
     ipcMain.handle(IpcChannels.LAUNCH_KILL, (): void => {
       if (this.childProcess && this.isRunning) {
+        logger.info(`[LaunchService] Kill requested for "${this.currentPackName ?? 'unknown'}"`)
         this.childProcess.kill()
       }
     })
@@ -445,9 +456,10 @@ class LaunchService {
 
         try {
           await fs.rm(instanceDir, { recursive: true, force: true })
+          logger.info(`[LaunchService] Pack deleted: "${payload.packName}"`)
           return true
         } catch (err) {
-          console.error(`[LaunchService] Failed to delete pack "${payload.packName}":`, err)
+          logger.error(`[LaunchService] Failed to delete pack "${payload.packName}":`, err)
           return false
         }
       },
@@ -461,6 +473,7 @@ class LaunchService {
       IpcChannels.LAUNCH_CREATE_SHORTCUT,
       async (_event, payload: LaunchCreateShortcutPayload): Promise<void> => {
         const { packName } = payload
+        logger.info(`[LaunchService] Creating desktop shortcut for "${packName}"`)
         const executablePath = app.getPath('exe')
         const desktopPath = app.getPath('desktop')
 
@@ -593,7 +606,9 @@ class LaunchService {
           )
         }
 
-        return uploadToPaste(crashText)
+        const url = await uploadToPaste(crashText)
+        logger.info(`[LaunchService] Crash report uploaded: ${url}`)
+        return url
       },
     )
   }
@@ -606,7 +621,9 @@ class LaunchService {
       if (!logText) {
         throw new Error('Log buffer is empty')
       }
-      return uploadToPaste(logText)
+      const url = await uploadToPaste(logText)
+      logger.info(`[LaunchService] Log uploaded: ${url}`)
+      return url
     })
   }
 

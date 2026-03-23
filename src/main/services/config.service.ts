@@ -5,6 +5,7 @@ import crypto from 'node:crypto'
 import { app } from 'electron'
 
 import { LauncherConfig, DEFAULT_CONFIG } from '../../shared/types'
+import { logger } from '../logger'
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -107,12 +108,18 @@ class ConfigService {
     } catch (err: unknown) {
       // ENOENT → first run; any other error → treat as missing and log.
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-        console.warn('[ConfigService] Failed to read config.json, using defaults:', err)
+        logger.warn('[ConfigService] Failed to read config.json, using defaults:', err)
       }
       this.firstStart = true
     }
 
     this.config = deepMerge(defaults, persisted)
+
+    if (this.firstStart) {
+      logger.info('[ConfigService] First start — config.json not found, using defaults')
+    } else {
+      logger.info('[ConfigService] Config loaded from disk')
+    }
   }
 
   /** Serialise the current config to config.json. */

@@ -6,6 +6,7 @@ import { IpcChannels } from '../ipc/channels'
 import { Constants } from '../constants'
 import { LauncherProfile, AuthProfilesUpdatedEvent } from '../../shared/types'
 import { getMainWindow } from '../app-state'
+import { logger } from '../logger'
 
 // ─── OAuth / Auth API constants ──────────────────────────────────────────────
 
@@ -269,7 +270,9 @@ export async function refreshProfile(profile: LauncherProfile): Promise<Launcher
     throw new Error('Profile has no OAuth refresh token; cannot refresh')
   }
 
+  logger.debug(`[AuthService] Refreshing tokens for ${profile.lastKnownUsername}`)
   const refreshed = await loginFlow(profile.oauthRefreshToken, true)
+  logger.debug(`[AuthService] Token refresh successful for ${refreshed.lastKnownUsername}`)
 
   // Carry forward identity fields that won't change during a token refresh
   return {
@@ -434,6 +437,8 @@ class AuthService {
         authUrl.searchParams.set('redirect_uri', REDIRECT_URI)
         authUrl.searchParams.set('scope', OAUTH_SCOPE)
 
+        logger.info('[AuthService] Microsoft login started — opening browser')
+
         // Start callback server before opening browser so the redirect is
         // always captured even when the browser responds very quickly.
         const codePromise = waitForOauthCallback(state, controller.signal)
@@ -448,10 +453,13 @@ class AuthService {
         const profile = await loginFlow(code, false)
 
         await saveProfile(profile)
+        logger.info(`[AuthService] Login successful: ${profile.lastKnownUsername} (${profile.uuid})`)
         pushProfilesUpdated()
       } catch (err: unknown) {
         const message =
           err instanceof Error ? err.message : 'Microsoft login failed'
+
+        logger.error('[AuthService] Login failed:', err)
 
         // Push an error event so the renderer can surface it in the UI
         const win = getMainWindow()
@@ -470,6 +478,7 @@ class AuthService {
       const config = configService.get()
       const { profiles, selectedProfileUuid } = config.profileStore
 
+      const leaving = profiles.find((p) => p.uuid === selectedProfileUuid)
       const remaining = profiles.filter((p) => p.uuid !== selectedProfileUuid)
       const nextSelected = remaining.length > 0 ? remaining[remaining.length - 1].uuid : undefined
 
@@ -480,15 +489,16 @@ class AuthService {
         },
       })
       await configService.save()
+      logger.info(`[AuthService] Profile logged out: ${leaving?.lastKnownUsername ?? selectedProfileUuid}`)
       pushProfilesUpdated()
     })
 
     // ── auth:switch-profile ───────────────────────────────────────────────────
     ipcMain.handle(IpcChannels.AUTH_SWITCH_PROFILE, async (_event, uuid: string) => {
       const config = configService.get()
-      const profileExists = config.profileStore.profiles.some((p) => p.uuid === uuid)
+      const profile = config.profileStore.profiles.find((p) => p.uuid === uuid)
 
-      if (!profileExists) {
+      if (!profile) {
         throw new Error(`Cannot switch to unknown profile UUID: ${uuid}`)
       }
 
@@ -499,6 +509,7 @@ class AuthService {
         },
       })
       await configService.save()
+      logger.info(`[AuthService] Switched to profile: ${profile.lastKnownUsername} (${uuid})`)
       pushProfilesUpdated()
     })
   }

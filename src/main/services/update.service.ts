@@ -4,6 +4,7 @@ import type { UpdateInfo, ProgressInfo } from 'electron-updater'
 import { IpcChannels } from '../ipc/channels'
 import { getMainWindow } from '../app-state'
 import { configService } from './config.service'
+import { logger } from '../logger'
 
 class UpdateService {
   private checking = false
@@ -12,11 +13,12 @@ class UpdateService {
     const channel = configService.get().updateChannel ?? 'stable'
     autoUpdater.autoDownload = false
     autoUpdater.autoInstallOnAppQuit = true
-    autoUpdater.logger = console
+    autoUpdater.logger = logger
     autoUpdater.channel = channel === 'experimental' ? 'experimental' : 'latest'
     autoUpdater.allowPrerelease = channel === 'experimental'
 
     autoUpdater.on('update-available', (info: UpdateInfo) => {
+      logger.info(`[UpdateService] Update available: v${info.version}`)
       getMainWindow()?.webContents.send(IpcChannels.UPDATE_AVAILABLE, {
         version: info.version,
         releaseNotes: info.releaseNotes ?? null,
@@ -38,6 +40,7 @@ class UpdateService {
     })
 
     autoUpdater.on('update-downloaded', (info: UpdateInfo) => {
+      logger.info(`[UpdateService] Update downloaded: v${info.version}`)
       getMainWindow()?.webContents.send(IpcChannels.UPDATE_DOWNLOADED, {
         version: info.version,
       })
@@ -62,10 +65,12 @@ class UpdateService {
     ipcMain.handle(IpcChannels.UPDATE_DOWNLOAD, () => autoUpdater.downloadUpdate())
 
     ipcMain.on(IpcChannels.UPDATE_INSTALL, () => {
+      logger.info('[UpdateService] Applying update and restarting…')
       autoUpdater.quitAndInstall(false, true)
     })
 
     ipcMain.on(IpcChannels.UPDATE_SET_CHANNEL, (_event, ch: 'stable' | 'experimental') => {
+      logger.info(`[UpdateService] Update channel changed to: ${ch}`)
       autoUpdater.channel = ch === 'experimental' ? 'experimental' : 'latest'
       autoUpdater.allowPrerelease = ch === 'experimental'
     })
@@ -74,7 +79,7 @@ class UpdateService {
     if (app.isPackaged) {
       setTimeout(() => {
         autoUpdater.checkForUpdates().catch((err: Error) => {
-          console.warn('[updater] Auto-check failed:', err.message)
+          logger.warn('[updater] Auto-check failed:', err.message)
         })
       }, 5000)
     }

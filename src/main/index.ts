@@ -10,6 +10,7 @@ setMaxListeners(30)
 import { registerIpcHandlers } from './ipc/router'
 import { configService } from './services/config.service'
 import { setMainWindow, setLaunchPackArg, getMainWindow } from './app-state'
+import { logger } from './logger'
 
 // ── CLI: --pack <name> ───────────────────────────────────────
 let _initialPackArg: string | null = null
@@ -76,6 +77,11 @@ app.whenReady().then(async () => {
   // Set app user model id for Windows notifications
   electronApp.setAppUserModelId('de.myftb.launcher')
 
+  // Initialise file logger — must happen after app is ready so getPath('logs') works
+  logger.init(app.getPath('logs'))
+  logger.captureConsole()  // redirect global console so third-party libs are also logged
+  logger.info(`[Launcher] Starting up — v${app.getVersion()} | ${process.platform} ${process.arch}`)
+
   // Register myftb:// deep-link protocol (webstart)
   app.setAsDefaultProtocolClient('myftb')
 
@@ -86,6 +92,10 @@ app.whenReady().then(async () => {
 
   // Load config first
   await configService.load()
+  const _cfg = configService.get()
+  logger.info(
+    `[Launcher] installDir: ${configService.getInstallDir()} | mem: ${_cfg.minMemory}–${_cfg.maxMemory} MB`
+  )
 
   // Register all IPC handlers
   registerIpcHandlers()
@@ -111,9 +121,11 @@ app.on('second-instance', (_event, commandLine, _workingDirectory, additionalDat
 
   const deepLink = commandLine.find((arg) => arg.startsWith('myftb://'))
   if (deepLink) {
+    logger.info(`[Launcher] Second instance: deep link received — ${deepLink}`)
     handleDeepLink(deepLink)
   } else if ((additionalData as { launchPackArg?: string }).launchPackArg) {
     const packName = (additionalData as { launchPackArg: string }).launchPackArg
+    logger.info(`[Launcher] Second instance: forwarding pack launch for "${packName}"`)
     getMainWindow()?.webContents.send('internal:launch-pack', packName)
   }
 })
@@ -130,6 +142,7 @@ function handleDeepLink(url: string): void {
       const packName = parsed.hostname === 'pack'
         ? parsed.pathname.replace(/^\//, '')
         : parsed.pathname.replace('/pack/', '')
+      logger.info(`[Launcher] Deep link: launching pack "${packName}"`)
       getMainWindow()?.webContents.send('internal:launch-pack', packName)
     }
   } catch {

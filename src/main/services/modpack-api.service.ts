@@ -7,6 +7,7 @@ import { ipcMain } from 'electron'
 import { configService } from './config.service'
 import { IpcChannels } from '../ipc/channels'
 import { Constants, fmt } from '../constants'
+import { logger } from '../logger'
 import type {
   ModpackManifestReference,
   ModpackManifest,
@@ -122,7 +123,7 @@ class ModpackApiService {
         this.cachedPackKey = packKey
         return data
       } catch (err) {
-        console.error('[ModpackApiService] Failed to fetch pack list:', err)
+        logger.error('[ModpackApiService] Failed to fetch pack list:', err)
         return []
       }
     })
@@ -141,7 +142,7 @@ class ModpackApiService {
           const data = (await response.json()) as ModpackManifest
           return data
         } catch (err) {
-          console.error(
+          logger.error(
             `[ModpackApiService] Failed to fetch manifest for "${payload.location}":`,
             err,
           )
@@ -171,7 +172,7 @@ class ModpackApiService {
         this.cachedPosts = enriched
         return enriched
       } catch (err) {
-        console.error('[ModpackApiService] Failed to fetch posts:', err)
+        logger.error('[ModpackApiService] Failed to fetch posts:', err)
         return []
       }
     })
@@ -195,7 +196,7 @@ class ModpackApiService {
         try {
           cacheDir = await configService.getSaveSubDir('cache')
         } catch (err) {
-          console.error('[ModpackApiService] Failed to resolve cache directory:', err)
+          logger.error('[ModpackApiService] Failed to resolve cache directory:', err)
           return null
         }
         const cachePath = path.join(cacheDir, `${cacheKey}.png`)
@@ -227,7 +228,7 @@ class ModpackApiService {
           await fs.writeFile(cachePath, buffer)
           return `data:image/png;base64,${buffer.toString('base64')}`
         } catch (err) {
-          console.error(
+          logger.error(
             `[ModpackApiService] Failed to fetch logo for "${payload.name}" (${imageUrl}):`,
             err,
           )

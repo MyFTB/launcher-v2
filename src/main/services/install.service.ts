@@ -21,6 +21,7 @@ import { Constants, fmt } from '../constants'
 import { configService } from './config.service'
 import { getMainWindow } from '../app-state'
 import { ensureRuntime, resolveJavaPath } from './java.service'
+import { logger } from '../logger'
 import type {
   ModpackManifest,
   FeatureCondition,
@@ -246,6 +247,7 @@ class InstallService {
 
     // 1. Fetch full manifest
     const manifestUrl = fmt(Constants.packManifest, reference.location)
+    logger.info(`[InstallService] Install requested: ${reference.name} v${reference.version} (MC ${reference.gameVersion})`)
     const manifestRes = await fetch(manifestUrl, {
       signal: AbortSignal.timeout(Constants.connectTimeoutMs),
     })
@@ -256,6 +258,7 @@ class InstallService {
 
     // 2. Feature gate — if pack has features and no selection provided, ask renderer
     if (manifest.features && manifest.features.length > 0 && !selectedFeatures) {
+      logger.info(`[InstallService] Awaiting feature selection for ${manifest.name} (${manifest.features.length} feature(s))`)
       const event: InstallNeedsFeaturesEvent = { features: manifest.features }
       pushEvent(IpcChannels.INSTALL_NEEDS_FEATURES, event)
       return
@@ -266,7 +269,7 @@ class InstallService {
     // 3. Kick off the actual install in the background so the IPC handle returns
     //    quickly (progress is pushed via events).
     this.runInstall(manifest, features).catch((err: unknown) => {
-      console.error('[InstallService] Unhandled install error:', err)
+      logger.error('[InstallService] Unhandled install error:', err)
     })
   }
 
@@ -289,14 +292,19 @@ class InstallService {
     this.currentAbort = abort
     const { signal } = abort
 
+    const featuresStr = selectedFeatures.length > 0 ? selectedFeatures.join(', ') : 'none'
+    logger.info(`[InstallService] Starting install: ${manifest.name} v${manifest.version} | MC ${manifest.gameVersion} | features: [${featuresStr}]`)
+
     try {
       await this.doInstall(manifest, selectedFeatures, signal)
+      logger.info(`[InstallService] Install complete: ${manifest.name} v${manifest.version}`)
     } catch (err: unknown) {
       if ((err as Error).name === 'AbortError') {
+        logger.info(`[InstallService] Install cancelled: ${manifest.name}`)
         const complete: InstallCompleteEvent = { success: false, error: 'Installation cancelled' }
         pushEvent(IpcChannels.INSTALL_COMPLETE, complete)
       } else {
-        console.error('[InstallService] Install failed:', err)
+        logger.error('[InstallService] Install failed:', err)
         const complete: InstallCompleteEvent = { success: false, error: formatInstallError(err) }
         pushEvent(IpcChannels.INSTALL_COMPLETE, complete)
       }
@@ -319,6 +327,7 @@ class InstallService {
 
     // ── b. Detect mod loader ─────────────────────────────────────────────────
     const { loader, libraryName } = detectModLoader(manifest)
+    logger.info(`[InstallService] Mod loader: ${loader}${libraryName ? ` (${libraryName})` : ''}`)
 
     // ── c. Install base Minecraft ────────────────────────────────────────────
     const minecraftDir = configService.getInstallDir()
@@ -337,6 +346,8 @@ class InstallService {
     if (!targetVersion) {
       throw new Error(`Minecraft version ${manifest.gameVersion} not found in version manifest`)
     }
+
+    logger.info(`[InstallService] Installing Minecraft ${manifest.gameVersion}…`)
 
     pushEvent(IpcChannels.INSTALL_PROGRESS, {
       total: 0,
@@ -369,11 +380,13 @@ class InstallService {
     signal.throwIfAborted()
 
     const javaPath = await resolveJavaPath(manifest)
+    logger.info(`[InstallService] Java resolved to: ${javaPath}`)
 
     // ── e. Install mod loader ─────────────────────────────────────────────────
     if (loader === 'forge' && libraryName) {
       const forgeEntry = buildForgeEntry(manifest.gameVersion, libraryName)
 
+      logger.info(`[InstallService] Installing Forge ${forgeEntry.version}…`)
       pushEvent(IpcChannels.INSTALL_PROGRESS, {
         total: 0,
         finished: 0,
@@ -381,12 +394,14 @@ class InstallService {
         currentFile: `Installing Forge ${forgeEntry.version}…`,
       } satisfies InstallProgressEvent)
 
+      logger.info(`[InstallService] Installing Forge ${forgeEntry.version}…`)
       await installForge(forgeEntry, minecraftDir, { java: javaPath })
 
       signal.throwIfAborted()
     } else if (loader === 'neoforge' && libraryName) {
       const neoforgeVersion = extractMavenVersion(libraryName)
 
+      logger.info(`[InstallService] Installing NeoForge ${neoforgeVersion}…`)
       pushEvent(IpcChannels.INSTALL_PROGRESS, {
         total: 0,
         finished: 0,
@@ -394,6 +409,7 @@ class InstallService {
         currentFile: `Installing NeoForge ${neoforgeVersion}…`,
       } satisfies InstallProgressEvent)
 
+      logger.info(`[InstallService] Installing NeoForge ${neoforgeVersion}…`)
       await installNeoForged('neoforge', neoforgeVersion, minecraftDir, { java: javaPath })
 
       // installNeoForged creates the version JSON under the installer's own ID
@@ -423,6 +439,7 @@ class InstallService {
       const loaderVersion = parts[2]
       const mcVersion = parts.slice(3).join('-')
 
+      logger.info(`[InstallService] Installing ${loader === 'fabric' ? 'Fabric' : 'Quilt'} loader ${loaderVersion} (MC ${mcVersion})…`)
       pushEvent(IpcChannels.INSTALL_PROGRESS, {
         total: 0,
         finished: 0,
@@ -457,12 +474,14 @@ class InstallService {
     // ── f. Install libraries + assets for the resolved version ────────────────
     // This covers Fabric/Quilt loader JARs and any libraries not yet on disk.
     // Forge/NeoForge handle their own libraries, but this is safe to run for all.
+    logger.info('[InstallService] Installing libraries and assets…')
     pushEvent(IpcChannels.INSTALL_PROGRESS, {
       total: 0, finished: 0, failed: 0,
       currentFile: 'Installiere Bibliotheken…',
     } satisfies InstallProgressEvent)
 
     const resolvedVersion = await Version.parse(minecraftDir, manifest.versionManifest.id)
+    logger.info(`[InstallService] Installing libraries and assets…`)
     await installResolvedLibraries(resolvedVersion.libraries, minecraftDir)
     await installAssets(resolvedVersion)
 
@@ -477,6 +496,8 @@ class InstallService {
     let finished = 0
     let failed = 0
 
+    logger.info(`[InstallService] Downloading ${total} modpack file(s)…`)
+
     // Also read old manifest to clean up removed files
     const manifestFilePath = path.join(instanceDir, 'manifest.json')
     let oldManifest: ModpackManifest | null = null
@@ -486,6 +507,11 @@ class InstallService {
     } catch {
       // No previous manifest — first install
     }
+
+    const isUpdate = oldManifest !== null
+    logger.info(
+      `[InstallService] ${isUpdate ? `Updating ${manifest.name} (${oldManifest!.version} → ${manifest.version})` : `First install of ${manifest.name} v${manifest.version}`} — ${tasks.length} file(s)`,
+    )
 
     pushEvent(IpcChannels.INSTALL_PROGRESS, {
       total,
@@ -550,7 +576,7 @@ class InstallService {
           finished++
         } catch (err: unknown) {
           if ((err as Error).name === 'AbortError') throw err
-          console.warn(`[InstallService] Failed to download ${url}:`, err)
+          logger.warn(`[InstallService] Failed to download ${url}:`, err)
           failed++
         }
 
@@ -569,18 +595,25 @@ class InstallService {
     }
     await Promise.all(workers)
 
+    logger.info(`[InstallService] File downloads done: ${finished}/${total} succeeded, ${failed} failed`)
+
     signal.throwIfAborted()
 
     // Remove files from old manifest that are no longer present in the current one
     if (oldManifest?.tasks) {
       const currentToPaths = new Set(tasks.map((t) => t.to))
+      let staleCount = 0
       for (const oldTask of oldManifest.tasks) {
         if (!currentToPaths.has(oldTask.to)) {
           const stale = path.join(instanceDir, oldTask.to)
           await fs.unlink(stale).catch(() => {
             // Ignore — file may already be gone
           })
+          staleCount++
         }
+      }
+      if (staleCount > 0) {
+        logger.info(`[InstallService] Removed ${staleCount} stale file(s) from previous version`)
       }
     }
 

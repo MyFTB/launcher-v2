@@ -1,6 +1,7 @@
 import { Client } from '@xhayper/discord-rpc'
 
 import { Constants } from '../constants'
+import { logger } from '../logger'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -77,14 +78,14 @@ class DiscordService {
 
     client.on('ready', () => {
       this.ready = true
-      console.log('[DiscordService] Connected to Discord.')
+      logger.info('[DiscordService] Connected to Discord.')
       this.pushPresence()
       this.startUpdateLoop()
     })
 
     // discord-rpc emits 'disconnected' when the pipe closes mid-session.
     client.on('disconnected', () => {
-      console.warn('[DiscordService] Disconnected from Discord; will attempt to reconnect.')
+      logger.warn('[DiscordService] Disconnected from Discord; will attempt to reconnect.')
       this.ready = false
       this.stopUpdateLoop()
       // Wait 30 s before retrying so we don't spam reconnect attempts.
@@ -95,7 +96,7 @@ class DiscordService {
       .login()
       .catch((err: unknown) => {
         // Discord is likely not running — this is not a fatal error.
-        console.warn('[DiscordService] Could not connect to Discord:', err)
+        logger.warn('[DiscordService] Could not connect to Discord:', err)
         this.ready = false
         // Retry after 60 s in case Discord is launched later.
         setTimeout(() => this.connect(), 60_000)
@@ -132,7 +133,7 @@ class DiscordService {
           largeImageKey: 'myftb',
         })
         .catch((err: unknown) => {
-          console.warn('[DiscordService] Failed to update presence (idle):', err)
+          logger.warn('[DiscordService] Failed to update presence (idle):', err)
         })
     } else {
       this.client
@@ -143,7 +144,7 @@ class DiscordService {
           startTimestamp: state.startTimestamp,
         })
         .catch((err: unknown) => {
-          console.warn('[DiscordService] Failed to update presence (playing):', err)
+          logger.warn('[DiscordService] Failed to update presence (playing):', err)
         })
     }
   }

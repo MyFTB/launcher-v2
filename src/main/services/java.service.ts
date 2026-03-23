@@ -23,6 +23,7 @@ import { Readable } from 'node:stream'
 import { app } from 'electron'
 
 import { Constants, fmt } from '../constants'
+import { logger } from '../logger'
 import type { ModpackManifest, InstallProgressEvent } from '../../shared/types'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -284,12 +285,12 @@ export async function resolveJavaPath(manifest: ModpackManifest): Promise<string
     const bin = process.platform === 'win32' ? 'java.exe' : 'java'
     const javaHomeBin = path.join(process.env.JAVA_HOME, 'bin', bin)
     if (javaHomeMatchesRequired(process.env.JAVA_HOME, required)) {
-      console.warn(
+      logger.warn(
         `[JavaService] No bundled runtime found; using JAVA_HOME (${process.env.JAVA_HOME})`,
       )
       return javaHomeBin
     }
-    console.warn(
+    logger.warn(
       `[JavaService] JAVA_HOME does not match required Java ${required}. ` +
         `Minecraft may crash. JAVA_HOME=${process.env.JAVA_HOME}`,
     )
@@ -297,7 +298,7 @@ export async function resolveJavaPath(manifest: ModpackManifest): Promise<string
   }
 
   // 5. Bare PATH fallback
-  console.warn(
+  logger.warn(
     `[JavaService] No Java ${required} found. Falling back to system PATH. ` +
       `Minecraft will likely crash if the system Java major version is wrong.`,
   )
@@ -328,6 +329,7 @@ export async function ensureRuntime(
   // Skip if already cached
   const cached = await getCachedRuntimeBin(effectiveRuntime)
   if (cached) {
+    logger.info(`[JavaService] Runtime '${effectiveRuntime}' already cached, skipping download`)
     return { total, finished, failed }
   }
 
@@ -352,6 +354,7 @@ export async function ensureRuntime(
 
   const objects = runtimeIndex.objects
   total += objects.length
+  logger.info(`[JavaService] Downloading runtime '${effectiveRuntime}': ${objects.length} file(s)…`)
 
   onProgress({ total, finished, failed, currentFile: 'Installing JRE…' })
 
@@ -378,7 +381,7 @@ export async function ensureRuntime(
       finished++
     } catch (err: unknown) {
       if ((err as Error).name === 'AbortError') throw err
-      console.warn(`[JavaService] Failed to download JRE file ${obj.path}:`, err)
+      logger.warn(`[JavaService] Failed to download JRE file ${obj.path}:`, err)
       failed++
     }
 
