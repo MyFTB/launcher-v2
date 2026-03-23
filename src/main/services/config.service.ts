@@ -31,7 +31,7 @@ function detectDefaultMaxMemory(): number {
  * recursively (arrays are replaced, not concatenated).
  */
 function deepMerge<T extends object>(base: T, incoming: Partial<T>): T {
-  const result: Record<string, unknown> = { ...base }
+  const result: Record<string, unknown> = { ...(base as Record<string, unknown>) }
 
   for (const key of Object.keys(incoming) as (keyof T)[]) {
     const incomingVal = incoming[key]

@@ -33,7 +33,7 @@ class PasteService {
     try {
       response = await fetch(endpoint, {
         method: 'POST',
-        body: content,
+        body: typeof content === 'string' ? content : new Uint8Array(content),
       })
     } catch (err: unknown) {
       throw new Error(

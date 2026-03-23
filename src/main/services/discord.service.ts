@@ -73,7 +73,7 @@ class DiscordService {
     // Tear down any previous client before creating a new one.
     this.teardown()
 
-    const client = new Client({ clientId: Constants.discordAppId, transport: 'ipc' })
+    const client = new Client({ clientId: Constants.discordAppId, transport: { type: 'ipc' } })
     this.client = client
 
     client.on('ready', () => {
