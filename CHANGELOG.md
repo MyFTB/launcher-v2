@@ -3,10 +3,11 @@
 All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-## [2.1.0-beta.1] — 2026-03-23
+## [2.1.0-experimental.1] — 2026-03-23
 
 ### 🐛 Bug Fixes
 
+- Check for updates immediately after channel switch
 - Clear running badge when Minecraft closes
 - Increase font sizes and width in PackSettingsModal
 - Persist running badge across tab switches
@@ -19,6 +20,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Surface AggregateError details in install failure message
 - Type-check script was checking solution file instead of node tsconfig
 - Update button now updates only, does not launch game
+- Use experimental semver prerelease tag so electron-updater can match channel
 - Use gh release edit to publish existing electron-builder draft
 - Use launch store when starting pack from home screen
 
@@ -26,6 +28,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Require ASCII-only characters in logger strings
 - Update CHANGELOG.md for v2.0.0 [skip ci]
+- Update CHANGELOG.md for v2.1.0-beta.1 [skip ci]
 - Update CHANGELOG.md for v2.1.0-beta.1 [skip ci]
 
 ### 🚀 Features
