@@ -73,6 +73,14 @@ class UpdateService {
       logger.info(`[UpdateService] Update channel changed to: ${ch}`)
       autoUpdater.channel = ch === 'experimental' ? 'experimental' : 'latest'
       autoUpdater.allowPrerelease = ch === 'experimental'
+      if (!this.checking) {
+        this.checking = true
+        autoUpdater.checkForUpdates().catch((err: Error) => {
+          logger.warn('[updater] Channel-switch check failed:', err.message)
+        }).finally(() => {
+          this.checking = false
+        })
+      }
     })
 
     // Auto-check 5 seconds after startup — only in packaged builds
