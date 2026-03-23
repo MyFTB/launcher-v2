@@ -71,6 +71,14 @@ export default function InstalledPacks() {
     })
   }, [storeLaunch])
 
+  const handleUpdate = useCallback(async (pack: ModpackManifestReference) => {
+    try {
+      await window.electronAPI.installModpack(pack, undefined)
+    } catch (err) {
+      console.error('Update error', err)
+    }
+  }, [])
+
   const handleContextMenu = useCallback((e: React.MouseEvent, packName: string) => {
     e.preventDefault()
     setContextMenu({ x: e.clientX, y: e.clientY, packName })
@@ -100,7 +108,13 @@ export default function InstalledPacks() {
   const contextMenuItems = useMemo(() => {
     if (!contextMenu) return []
     const { packName } = contextMenu
+    const pack = packs.find((p) => p.name === packName)
+    const hasUpdate = !!updateMap[packName]
     return [
+      ...(hasUpdate && pack ? [{
+        label: 'Aktualisieren',
+        action: () => handleUpdate(pack),
+      }] : []),
       {
         label: 'Einstellungen',
         action: () => setPackSettingsTarget(packName),
@@ -127,7 +141,7 @@ export default function InstalledPacks() {
         action: () => handleDelete(packName),
       },
     ]
-  }, [contextMenu?.packName, handleUploadCrash, handleDelete])
+  }, [contextMenu?.packName, packs, updateMap, handleUpdate, handleUploadCrash, handleDelete])
 
   const isGameRunning = launchState === 'running' || launchState === 'launching'
   const updateCount = Object.values(updateMap).filter(Boolean).length

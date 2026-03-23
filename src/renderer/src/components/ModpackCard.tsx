@@ -110,7 +110,7 @@ export default memo(function ModpackCard({
               }}
               disabled={isRunning}
             >
-              {isRunning ? 'Läuft...' : 'Spielen'}
+              {isRunning ? 'Läuft...' : hasUpdate ? 'Aktualisieren' : 'Spielen'}
             </button>
           ) : (
             <button
