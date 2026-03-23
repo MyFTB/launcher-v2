@@ -116,7 +116,7 @@ class ConfigService {
     this.config = deepMerge(defaults, persisted)
 
     if (this.firstStart) {
-      logger.info('[ConfigService] First start — config.json not found, using defaults')
+      logger.info('[ConfigService] First start - config.json not found, using defaults')
     } else {
       logger.info('[ConfigService] Config loaded from disk')
     }
@@ -139,6 +139,13 @@ class ConfigService {
   /** Merge a partial config object into the current state (does NOT auto-save). */
   merge(partial: Partial<LauncherConfig>): void {
     this.config = deepMerge(this.config, partial)
+    // packConfigs uses replacement semantics — deepMerge can only add/update
+    // keys, never remove them, so an explicit pack deletion would be ignored.
+    if (partial.packConfigs !== undefined) {
+      this.config.packConfigs = { ...partial.packConfigs }
+      const names = Object.keys(this.config.packConfigs)
+      logger.debug(`[ConfigService] packConfigs replaced - ${names.length} override(s): ${names.join(', ') || '(none)'}`)
+    }
   }
 
   /** Returns `true` when config.json was absent during `load()`. */

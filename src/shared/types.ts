@@ -104,6 +104,13 @@ export interface LauncherProfileStore {
 
 // ─── Launcher Config ─────────────────────────────────────────
 
+/** Per-modpack memory and JVM argument overrides. Unset fields fall back to global config. */
+export interface PackConfig {
+  minMemory?: number
+  maxMemory?: number
+  jvmArgs?: string
+}
+
 export interface LauncherConfig {
   /** Random UUID identifying this client installation */
   clientToken: string
@@ -123,6 +130,8 @@ export interface LauncherConfig {
   lastPlayedPacks: string[]
   /** Key-value map for AutoConfig feature state */
   autoConfigs: Record<string, string>
+  /** Per-pack memory and JVM argument overrides, keyed by pack name */
+  packConfigs: Record<string, PackConfig>
   profileStore: LauncherProfileStore
   /** Update channel: stable = releases only, experimental = prereleases included */
   updateChannel: 'stable' | 'experimental'
@@ -140,6 +149,7 @@ export const DEFAULT_CONFIG: LauncherConfig = {
   allowWebstart: true,
   lastPlayedPacks: [],
   autoConfigs: {},
+  packConfigs: {},
   profileStore: { profiles: [], selectedProfileUuid: undefined },
   updateChannel: 'stable',
 }

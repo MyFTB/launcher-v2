@@ -65,7 +65,7 @@ class UpdateService {
     ipcMain.handle(IpcChannels.UPDATE_DOWNLOAD, () => autoUpdater.downloadUpdate())
 
     ipcMain.on(IpcChannels.UPDATE_INSTALL, () => {
-      logger.info('[UpdateService] Applying update and restarting…')
+      logger.info('[UpdateService] Applying update and restarting...')
       autoUpdater.quitAndInstall(false, true)
     })
 

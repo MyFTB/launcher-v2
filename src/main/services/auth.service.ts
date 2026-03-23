@@ -437,7 +437,7 @@ class AuthService {
         authUrl.searchParams.set('redirect_uri', REDIRECT_URI)
         authUrl.searchParams.set('scope', OAUTH_SCOPE)
 
-        logger.info('[AuthService] Microsoft login started — opening browser')
+        logger.info('[AuthService] Microsoft login started - opening browser')
 
         // Start callback server before opening browser so the redirect is
         // always captured even when the browser responds very quickly.

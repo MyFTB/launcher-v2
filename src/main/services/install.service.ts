@@ -336,7 +336,7 @@ class InstallService {
       total: 0,
       finished: 0,
       failed: 0,
-      currentFile: `Fetching Minecraft version list…`,
+      currentFile: `Fetching Minecraft version list...`,
     } satisfies InstallProgressEvent)
 
     signal.throwIfAborted()
@@ -347,13 +347,13 @@ class InstallService {
       throw new Error(`Minecraft version ${manifest.gameVersion} not found in version manifest`)
     }
 
-    logger.info(`[InstallService] Installing Minecraft ${manifest.gameVersion}…`)
+    logger.info(`[InstallService] Installing Minecraft ${manifest.gameVersion}...`)
 
     pushEvent(IpcChannels.INSTALL_PROGRESS, {
       total: 0,
       finished: 0,
       failed: 0,
-      currentFile: `Installing Minecraft ${manifest.gameVersion}…`,
+      currentFile: `Installing Minecraft ${manifest.gameVersion}...`,
     } satisfies InstallProgressEvent)
 
     await installMinecraft(targetVersion, minecraftDir)
@@ -367,7 +367,7 @@ class InstallService {
       total: 0,
       finished: 0,
       failed: 0,
-      currentFile: 'Preparing Java runtime…',
+      currentFile: 'Preparing Java runtime...',
     } satisfies InstallProgressEvent)
 
     await ensureRuntime(
@@ -386,30 +386,30 @@ class InstallService {
     if (loader === 'forge' && libraryName) {
       const forgeEntry = buildForgeEntry(manifest.gameVersion, libraryName)
 
-      logger.info(`[InstallService] Installing Forge ${forgeEntry.version}…`)
+      logger.info(`[InstallService] Installing Forge ${forgeEntry.version}...`)
       pushEvent(IpcChannels.INSTALL_PROGRESS, {
         total: 0,
         finished: 0,
         failed: 0,
-        currentFile: `Installing Forge ${forgeEntry.version}…`,
+        currentFile: `Installing Forge ${forgeEntry.version}...`,
       } satisfies InstallProgressEvent)
 
-      logger.info(`[InstallService] Installing Forge ${forgeEntry.version}…`)
+      logger.info(`[InstallService] Installing Forge ${forgeEntry.version}...`)
       await installForge(forgeEntry, minecraftDir, { java: javaPath })
 
       signal.throwIfAborted()
     } else if (loader === 'neoforge' && libraryName) {
       const neoforgeVersion = extractMavenVersion(libraryName)
 
-      logger.info(`[InstallService] Installing NeoForge ${neoforgeVersion}…`)
+      logger.info(`[InstallService] Installing NeoForge ${neoforgeVersion}...`)
       pushEvent(IpcChannels.INSTALL_PROGRESS, {
         total: 0,
         finished: 0,
         failed: 0,
-        currentFile: `Installing NeoForge ${neoforgeVersion}…`,
+        currentFile: `Installing NeoForge ${neoforgeVersion}...`,
       } satisfies InstallProgressEvent)
 
-      logger.info(`[InstallService] Installing NeoForge ${neoforgeVersion}…`)
+      logger.info(`[InstallService] Installing NeoForge ${neoforgeVersion}...`)
       await installNeoForged('neoforge', neoforgeVersion, minecraftDir, { java: javaPath })
 
       // installNeoForged creates the version JSON under the installer's own ID
@@ -439,12 +439,12 @@ class InstallService {
       const loaderVersion = parts[2]
       const mcVersion = parts.slice(3).join('-')
 
-      logger.info(`[InstallService] Installing ${loader === 'fabric' ? 'Fabric' : 'Quilt'} loader ${loaderVersion} (MC ${mcVersion})…`)
+      logger.info(`[InstallService] Installing ${loader === 'fabric' ? 'Fabric' : 'Quilt'} loader ${loaderVersion} (MC ${mcVersion})...`)
       pushEvent(IpcChannels.INSTALL_PROGRESS, {
         total: 0,
         finished: 0,
         failed: 0,
-        currentFile: `Installing ${loader === 'fabric' ? 'Fabric' : 'Quilt'} ${loaderVersion}…`,
+        currentFile: `Installing ${loader === 'fabric' ? 'Fabric' : 'Quilt'} ${loaderVersion}...`,
       } satisfies InstallProgressEvent)
 
       // installFabric writes the version JSON AND downloads the loader libraries
@@ -474,14 +474,14 @@ class InstallService {
     // ── f. Install libraries + assets for the resolved version ────────────────
     // This covers Fabric/Quilt loader JARs and any libraries not yet on disk.
     // Forge/NeoForge handle their own libraries, but this is safe to run for all.
-    logger.info('[InstallService] Installing libraries and assets…')
+    logger.info('[InstallService] Installing libraries and assets...')
     pushEvent(IpcChannels.INSTALL_PROGRESS, {
       total: 0, finished: 0, failed: 0,
-      currentFile: 'Installiere Bibliotheken…',
+      currentFile: 'Installiere Bibliotheken...',
     } satisfies InstallProgressEvent)
 
     const resolvedVersion = await Version.parse(minecraftDir, manifest.versionManifest.id)
-    logger.info(`[InstallService] Installing libraries and assets…`)
+    logger.info(`[InstallService] Installing libraries and assets...`)
     await installResolvedLibraries(resolvedVersion.libraries, minecraftDir)
     await installAssets(resolvedVersion)
 
@@ -496,7 +496,7 @@ class InstallService {
     let finished = 0
     let failed = 0
 
-    logger.info(`[InstallService] Downloading ${total} modpack file(s)…`)
+    logger.info(`[InstallService] Downloading ${total} modpack file(s)...`)
 
     // Also read old manifest to clean up removed files
     const manifestFilePath = path.join(instanceDir, 'manifest.json')

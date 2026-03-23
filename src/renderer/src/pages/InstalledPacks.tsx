@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import type { ModpackManifestReference } from '@shared/types'
 import ModpackCard from '../components/ModpackCard'
 import ContextMenu from '../components/ContextMenu'
+import PackSettingsModal from '../components/PackSettingsModal'
 import { useNavigate } from 'react-router-dom'
 import { useLaunchStore } from '../store/launch.store'
 
@@ -19,6 +20,7 @@ export default function InstalledPacks() {
   const [reloading, setReloading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
+  const [packSettingsTarget, setPackSettingsTarget] = useState<string | null>(null)
   const [uploadMessage, setUploadMessage] = useState<string | null>(null)
   const uploadTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -99,6 +101,10 @@ export default function InstalledPacks() {
     if (!contextMenu) return []
     const { packName } = contextMenu
     return [
+      {
+        label: 'Einstellungen',
+        action: () => setPackSettingsTarget(packName),
+      },
       {
         label: 'Ordner öffnen',
         action: () => window.electronAPI.launchOpenFolder(packName),
@@ -234,6 +240,15 @@ export default function InstalledPacks() {
           y={contextMenu.y}
           items={contextMenuItems}
           onClose={handleContextMenuClose}
+        />
+      )}
+
+      {/* Per-pack settings modal */}
+      {packSettingsTarget && (
+        <PackSettingsModal
+          packName={packSettingsTarget}
+          packTitle={packs.find((p) => p.name === packSettingsTarget)?.title ?? packSettingsTarget}
+          onClose={() => setPackSettingsTarget(null)}
         />
       )}
     </div>

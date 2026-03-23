@@ -338,7 +338,7 @@ export async function ensureRuntime(
   const runtimeIndexName = `${effectiveRuntime}-${platform}${arch}`
   const runtimeIndexUrl = fmt(Constants.runtimeIndex, runtimeIndexName)
 
-  onProgress({ total, finished, failed, currentFile: 'Downloading JRE index…' })
+  onProgress({ total, finished, failed, currentFile: 'Downloading JRE index...' })
 
   const indexRes = await fetch(runtimeIndexUrl, { signal })
   if (!indexRes.ok) {
@@ -354,9 +354,9 @@ export async function ensureRuntime(
 
   const objects = runtimeIndex.objects
   total += objects.length
-  logger.info(`[JavaService] Downloading runtime '${effectiveRuntime}': ${objects.length} file(s)…`)
+  logger.info(`[JavaService] Downloading runtime '${effectiveRuntime}': ${objects.length} file(s)...`)
 
-  onProgress({ total, finished, failed, currentFile: 'Installing JRE…' })
+  onProgress({ total, finished, failed, currentFile: 'Installing JRE...' })
 
   for (const obj of objects) {
     signal.throwIfAborted()

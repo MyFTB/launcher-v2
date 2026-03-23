@@ -282,13 +282,26 @@ class LaunchService {
 
         // ── 5. Build LaunchOption ─────────────────────────────────────────────
         const config = configService.get()
+        const packOverride = config.packConfigs?.[packName] ?? {}
+
+        const effectiveMinMemory = packOverride.minMemory ?? config.minMemory
+        const effectiveMaxMemory = packOverride.maxMemory ?? config.maxMemory
+        const effectiveJvmArgs   = packOverride.jvmArgs   ?? config.jvmArgs
+
+        if (Object.keys(packOverride).length > 0) {
+          logger.info(
+            `[LaunchService] Pack overrides for "${packName}": ` +
+            `mem ${effectiveMinMemory}–${effectiveMaxMemory} MB, ` +
+            `jvmArgs: "${effectiveJvmArgs}"`,
+          )
+        }
 
         // UUID without dashes (Minecraft auth expectation)
         const uuidNoDashes = profile.uuid.replace(/-/g, '')
 
-        // Extra JVM args from config string
-        const extraJVMArgs: string[] = config.jvmArgs
-          ? config.jvmArgs
+        // Extra JVM args from effective config string (pack override → global fallback)
+        const extraJVMArgs: string[] = effectiveJvmArgs
+          ? effectiveJvmArgs
               .trim()
               .split(/\s+/)
               .filter((a) => a.length > 0)
@@ -315,8 +328,8 @@ class LaunchService {
           accessToken: profile.minecraftAccessToken,
           gameProfile: { id: uuidNoDashes, name: profile.lastKnownUsername },
           userType: 'msa' as const,
-          minMemory: config.minMemory,
-          maxMemory: config.maxMemory,
+          minMemory: effectiveMinMemory,
+          maxMemory: effectiveMaxMemory,
           extraJVMArgs,
           resolution: { width: config.gameWidth, height: config.gameHeight },
           javaPath,
@@ -327,7 +340,7 @@ class LaunchService {
         // ── 6. Emit launching state ───────────────────────────────────────────
         logger.info(
           `[LaunchService] Starting "${packName}" | MC ${manifest.versionManifest.id}` +
-          ` | Java: ${javaPath} | mem: ${config.minMemory}–${config.maxMemory} MB`,
+          ` | Java: ${javaPath} | mem: ${effectiveMinMemory}–${effectiveMaxMemory} MB`,
         )
         sendState({ state: 'launching' })
 
@@ -456,6 +469,15 @@ class LaunchService {
 
         try {
           await fs.rm(instanceDir, { recursive: true, force: true })
+
+          // Remove any per-pack config override stored for this pack
+          const cfg = configService.get()
+          if (cfg.packConfigs?.[payload.packName]) {
+            const { [payload.packName]: _removed, ...rest } = cfg.packConfigs
+            configService.merge({ packConfigs: rest })
+            await configService.save()
+          }
+
           logger.info(`[LaunchService] Pack deleted: "${payload.packName}"`)
           return true
         } catch (err) {

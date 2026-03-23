@@ -153,5 +153,16 @@ Download/validation failures from `@xmcl/file-transfer` are thrown as `Aggregate
 
 **Standing rule:** Always write or extend a test in `src/tests/` whenever a bug is fixed or new functionality is added. A runtime bug (`remotePacks.filter is not a function`) slipped through because there were no tests for pack-list parsing — this rule exists to prevent that pattern. Test files follow `src/tests/<service-or-feature>.test.ts` naming.
 
+### Logging conventions
+All main-process code uses `src/main/logger.ts`. Import with `import { logger } from '../logger'`.
+
+**Standing rule:** Every main-process code path that handles user-triggered actions, config changes, errors, or significant state transitions **must** have a `logger.*` call. Use the right level:
+- `logger.info` — user action completed, config saved, service started/stopped
+- `logger.warn` — recoverable error, unexpected-but-handled condition
+- `logger.error` — unrecoverable error, caught exception
+- `logger.debug` — internal state useful only for debugging (e.g. intermediate values)
+
+When adding or modifying any main-process service method, always ask: "Would I want to see this in the log file when debugging a user's issue?" If yes, add the log line.
+
 ### Deep links & single instance
 The `myftb://pack/<name>` URL scheme auto-launches a pack. A single-instance lock is enforced; a second launch focuses the existing window and forwards the `--pack` argument or deep link via `internal:launch-pack` push event.
