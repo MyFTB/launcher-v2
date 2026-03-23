@@ -9,6 +9,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 setMaxListeners(30)
 import { registerIpcHandlers } from './ipc/router'
 import { configService } from './services/config.service'
+import { launchService } from './services/launch.service'
 import { setMainWindow, setLaunchPackArg, getMainWindow } from './app-state'
 import { logger } from './logger'
 
@@ -109,6 +110,10 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
+})
+
+app.on('before-quit', () => {
+  launchService.detach()
 })
 
 // Second instance (Windows/Linux deep link or duplicate launch)

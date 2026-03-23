@@ -435,6 +435,18 @@ class LaunchService {
     })
   }
 
+  /**
+   * Detach the running Minecraft process so it survives launcher close.
+   * Called from the `before-quit` handler in index.ts.
+   */
+  detach(): void {
+    const child = this.childProcess
+    if (!child) return
+    logger.info(`[LaunchService] Detaching Minecraft (PID: ${child.pid ?? 'unknown'}) - launcher closing`)
+    child.unref()
+    this.childProcess = null
+  }
+
   // ── IPC: launch:get-log ────────────────────────────────────────────────────
 
   private handleLaunchGetLog(): void {
