@@ -214,16 +214,21 @@ jobs:
           git push origin HEAD:main
 
       # Publish the GitHub Release.
-      # electron-builder's --publish always already uploaded platform
-      # artifacts as draft; this step finalises the release.
+      # electron-builder's --publish always already created a draft release and
+      # uploaded all platform artifacts to it.  We use `gh release edit` here
+      # (instead of softprops/action-gh-release) so we update *that* existing
+      # draft rather than accidentally creating a second release.
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          name: "MyFTB Launcher ${{ github.ref_name }}"
-          body_path: RELEASE_NOTES.md
-          draft: false
-          prerelease: ${{ contains(github.ref_name, '-') }}
+        run: |
+          PRERELEASE_FLAG=""
+          if [[ "${{ github.ref_name }}" == *-* ]]; then
+            PRERELEASE_FLAG="--prerelease"
+          fi
+          gh release edit "${{ github.ref_name }}" \
+            --draft=false \
+            --title "MyFTB Launcher ${{ github.ref_name }}" \
+            --notes-file RELEASE_NOTES.md \
+            $PRERELEASE_FLAG
         env:
-          GITHUB_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
 
