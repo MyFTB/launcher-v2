@@ -19,12 +19,14 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Surface AggregateError details in install failure message
 - Type-check script was checking solution file instead of node tsconfig
 - Update button now updates only, does not launch game
+- Use gh release edit to publish existing electron-builder draft
 - Use launch store when starting pack from home screen
 
 ### 📚 Documentation
 
 - Require ASCII-only characters in logger strings
 - Update CHANGELOG.md for v2.0.0 [skip ci]
+- Update CHANGELOG.md for v2.1.0-beta.1 [skip ci]
 
 ### 🚀 Features
 
