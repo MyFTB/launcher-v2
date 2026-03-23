@@ -57,8 +57,13 @@ export const useLaunchStore = create<LaunchStoreState>()((set) => ({
 
   async launch(packName: string) {
     set({ currentPack: packName, logLines: [] })
-    await ipc.launch.start(packName)
-    // Further state updates arrive via 'launch:state' push events.
+    try {
+      await ipc.launch.start(packName)
+      // Further state updates arrive via 'launch:state' push events.
+    } catch (err) {
+      set({ currentPack: null })
+      throw err
+    }
   },
 
   async kill() {
@@ -91,9 +96,12 @@ export const useLaunchStore = create<LaunchStoreState>()((set) => ({
     // Minecraft process lifecycle state changes.
     onEvent('launch:state', (...args: unknown[]) => {
       const event = args[0] as LaunchStateEvent
+      const running = event.state === 'launching' || event.state === 'running'
       set({
         launchState: event.state,
-        isRunning: event.state === 'launching' || event.state === 'running',
+        isRunning: running,
+        // Clear the running pack once the game closes/crashes so badges disappear.
+        ...(!running && { currentPack: null }),
       })
     })
 

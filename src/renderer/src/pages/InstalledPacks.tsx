@@ -1,8 +1,9 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
-import type { ModpackManifestReference, LaunchState } from '@shared/types'
+import type { ModpackManifestReference } from '@shared/types'
 import ModpackCard from '../components/ModpackCard'
 import ContextMenu from '../components/ContextMenu'
 import { useNavigate } from 'react-router-dom'
+import { useLaunchStore } from '../store/launch.store'
 
 interface ContextMenuState {
   x: number
@@ -17,11 +18,14 @@ export default function InstalledPacks() {
   const [loading, setLoading] = useState(true)
   const [reloading, setReloading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [launchState, setLaunchState] = useState<LaunchState | null>(null)
-  const [runningPack, setRunningPack] = useState<string | null>(null)
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [uploadMessage, setUploadMessage] = useState<string | null>(null)
   const uploadTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Launch state lives in the store so it survives tab switches.
+  const launchState = useLaunchStore((s) => s.launchState)
+  const runningPack = useLaunchStore((s) => s.currentPack)
+  const storeLaunch = useLaunchStore((s) => s.launch)
 
   const loadPacks = useCallback(async (bustCache = false) => {
     try {
@@ -59,29 +63,11 @@ export default function InstalledPacks() {
     setReloading(false)
   }, [loadPacks])
 
-  // Subscribe to launch state events
-  useEffect(() => {
-    const unsub = window.electronAPI.on('launch:state', (...args: unknown[]) => {
-      const event = args[0] as { state: LaunchState; packName?: string }
-      setLaunchState(event.state)
-      if (event.state === 'running' || event.state === 'launching') {
-        if (event.packName) setRunningPack(event.packName)
-      } else if (event.state === 'closed' || event.state === 'crashed') {
-        setRunningPack(null)
-      }
-    })
-    return unsub
-  }, [])
-
   const handlePlay = useCallback((packName: string) => {
-    setRunningPack(packName)
-    setLaunchState('launching')
-    window.electronAPI.launchStart(packName).catch((err) => {
+    storeLaunch(packName).catch((err) => {
       console.error('Launch error', err)
-      setRunningPack(null)
-      setLaunchState(null)
     })
-  }, [])
+  }, [storeLaunch])
 
   const handleContextMenu = useCallback((e: React.MouseEvent, packName: string) => {
     e.preventDefault()
