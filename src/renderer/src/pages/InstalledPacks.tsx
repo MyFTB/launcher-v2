@@ -1,8 +1,9 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
-import type { ModpackManifestReference } from '@shared/types'
+import type { ModpackManifestReference, InstallProgressEvent } from '@shared/types'
 import ModpackCard from '../components/ModpackCard'
 import ContextMenu from '../components/ContextMenu'
 import PackSettingsModal from '../components/PackSettingsModal'
+import ProgressModal from '../components/ProgressModal'
 import { useNavigate } from 'react-router-dom'
 import { useLaunchStore } from '../store/launch.store'
 
@@ -28,6 +29,17 @@ export default function InstalledPacks() {
   const launchState = useLaunchStore((s) => s.launchState)
   const runningPack = useLaunchStore((s) => s.currentPack)
   const storeLaunch = useLaunchStore((s) => s.launch)
+
+  // Update (install) progress state
+  const [updatingPack, setUpdatingPack] = useState<ModpackManifestReference | null>(null)
+  const [updateProgress, setUpdateProgress] = useState<InstallProgressEvent | null>(null)
+  const [updateResult, setUpdateResult] = useState<{ success: boolean; error?: string } | null>(null)
+  const updatingPackRef = useRef(updatingPack)
+  const updatingTitleRef = useRef<string>('')
+  useEffect(() => {
+    updatingPackRef.current = updatingPack
+    if (updatingPack) updatingTitleRef.current = updatingPack.title
+  }, [updatingPack])
 
   const loadPacks = useCallback(async (bustCache = false) => {
     try {
@@ -58,6 +70,26 @@ export default function InstalledPacks() {
     return () => { cancelled = true }
   }, [loadPacks])
 
+  useEffect(() => {
+    const unsubProgress = window.electronAPI.on('install:progress', (...args: unknown[]) => {
+      if (updatingPackRef.current) setUpdateProgress(args[0] as InstallProgressEvent)
+    })
+    const unsubComplete = window.electronAPI.on('install:complete', (...args: unknown[]) => {
+      if (!updatingPackRef.current) return
+      const event = args[0] as { success: boolean; error?: string }
+      if (event.success) {
+        loadPacks().catch(() => {})
+      }
+      setUpdateProgress(null)
+      setUpdateResult(event)
+      setUpdatingPack(null)
+    })
+    return () => {
+      unsubProgress()
+      unsubComplete()
+    }
+  }, [loadPacks])
+
   const handleReload = useCallback(async () => {
     setReloading(true)
     setError(null)
@@ -72,11 +104,25 @@ export default function InstalledPacks() {
   }, [storeLaunch])
 
   const handleUpdate = useCallback(async (pack: ModpackManifestReference) => {
-    try {
-      await window.electronAPI.installModpack(pack, undefined)
-    } catch (err) {
+    setUpdatingPack(pack)
+    setUpdateProgress(null)
+    setUpdateResult(null)
+    window.electronAPI.installModpack(pack, undefined).catch((err) => {
       console.error('Update error', err)
-    }
+      setUpdatingPack(null)
+      setUpdateProgress(null)
+    })
+  }, [])
+
+  const handleUpdateCancel = useCallback(() => {
+    window.electronAPI.installCancel().catch(console.error)
+    setUpdatingPack(null)
+    setUpdateProgress(null)
+    setUpdateResult(null)
+  }, [])
+
+  const handleUpdateDismiss = useCallback(() => {
+    setUpdateResult(null)
   }, [])
 
   const handleContextMenu = useCallback((e: React.MouseEvent, packName: string) => {
@@ -264,6 +310,18 @@ export default function InstalledPacks() {
           packName={packSettingsTarget}
           packTitle={packs.find((p) => p.name === packSettingsTarget)?.title ?? packSettingsTarget}
           onClose={() => setPackSettingsTarget(null)}
+        />
+      )}
+
+      {/* Update progress modal */}
+      {(updatingPack || updateResult) && (
+        <ProgressModal
+          progress={updateProgress}
+          packTitle={updatingTitleRef.current}
+          result={updateResult}
+          successText="Erfolgreich aktualisiert!"
+          onCancel={handleUpdateCancel}
+          onDismiss={handleUpdateDismiss}
         />
       )}
     </div>

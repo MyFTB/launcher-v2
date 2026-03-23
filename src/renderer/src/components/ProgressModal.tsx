@@ -4,11 +4,12 @@ interface ProgressModalProps {
   progress: InstallProgressEvent | null
   packTitle: string
   result: { success: boolean; error?: string } | null
+  successText?: string
   onCancel: () => void
   onDismiss: () => void
 }
 
-export default function ProgressModal({ progress, packTitle, result, onCancel, onDismiss }: ProgressModalProps) {
+export default function ProgressModal({ progress, packTitle, result, successText = 'Erfolgreich installiert!', onCancel, onDismiss }: ProgressModalProps) {
   const percent =
     progress && progress.total > 0
       ? Math.round((progress.finished / progress.total) * 100)
@@ -33,7 +34,7 @@ export default function ProgressModal({ progress, packTitle, result, onCancel, o
                 </div>
                 <div className="text-center">
                   <h2 className="text-lg font-semibold text-text-primary">{packTitle}</h2>
-                  <p className="text-sm text-text-secondary mt-1">Erfolgreich installiert!</p>
+                  <p className="text-sm text-text-secondary mt-1">{successText}</p>
                 </div>
               </>
             ) : (
