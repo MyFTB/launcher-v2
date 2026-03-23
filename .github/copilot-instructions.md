@@ -164,5 +164,7 @@ All main-process code uses `src/main/logger.ts`. Import with `import { logger } 
 
 When adding or modifying any main-process service method, always ask: "Would I want to see this in the log file when debugging a user's issue?" If yes, add the log line.
 
+**Logger strings must use ASCII-only characters.** No em dashes (`—`), en dashes (`–`), ellipsis (`…`), curly quotes, or other Unicode. Use `' - '`, `'...'`, and straight quotes instead. Non-ASCII bytes in the log file are garbled on Windows when viewed with non-UTF-8 tools.
+
 ### Deep links & single instance
 The `myftb://pack/<name>` URL scheme auto-launches a pack. A single-instance lock is enforced; a second launch focuses the existing window and forwards the `--pack` argument or deep link via `internal:launch-pack` push event.
