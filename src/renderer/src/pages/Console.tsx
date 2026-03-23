@@ -432,7 +432,7 @@ export default function Console() {
       <div className="relative flex-1 min-h-0 overflow-hidden">
         <div
           ref={scrollRef}
-          className="absolute inset-0 overflow-y-auto bg-bg-base font-mono text-xs p-4 pb-10 space-y-px"
+          className="absolute inset-0 overflow-y-auto bg-bg-base font-mono text-xs p-4 pb-10 space-y-px select-text cursor-text"
           onScroll={(e) => {
             if (programmaticScrollRef.current) return
             const el = e.currentTarget
