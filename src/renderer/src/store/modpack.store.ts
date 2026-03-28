@@ -25,19 +25,21 @@ import type {
   InstallCompleteEvent,
   InstallNeedsFeaturesEvent,
   InstallProgressEvent,
-  ModpackManifest,
   ModpackManifestReference,
 } from '@shared/types'
 import { ipc, onEvent } from '@renderer/ipc/client'
 
 // ─── State & actions ─────────────────────────────────────────────────────────
 
+/** Lightweight shape returned by installGetInstalled — not a full manifest. */
+type InstalledPackInfo = { name: string; version: string }
+
 interface ModpackState {
   // ── Data ────────────────────────────────────────────────────────────────────
   remotePacks: ModpackManifestReference[]
-  installedPacks: ModpackManifest[]
+  installedPacks: InstalledPackInfo[]
   /** Installed packs ordered by lastPlayedPacks config key. */
-  recentPacks: ModpackManifest[]
+  recentPacks: InstalledPackInfo[]
 
   // ── Loading flags ───────────────────────────────────────────────────────────
   remoteLoading: boolean
@@ -107,7 +109,7 @@ export const useModpackStore = create<ModpackState>()((set, get) => ({
     // Preserve the order defined by lastPlayedPacks (most recent first).
     const recent = lastPlayedPacks
       .map((name) => installedPacks.find((p) => p.name === name))
-      .filter((p): p is ModpackManifest => p !== undefined)
+      .filter((p): p is InstalledPackInfo => p !== undefined)
     set({ recentPacks: recent })
   },
 

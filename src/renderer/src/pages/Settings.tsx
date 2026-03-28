@@ -627,7 +627,7 @@ export default function Settings() {
           >
             Zurücksetzen
           </button>
-          <button className="btn-primary" disabled={saving} onClick={handleSave}>
+          <button className="btn-primary" disabled={saving || form.minMemory > form.maxMemory} onClick={handleSave}>
             {saving ? 'Speichern…' : 'Speichern'}
           </button>
         </div>

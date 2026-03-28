@@ -304,7 +304,7 @@ export default function PackSettingsModal({ packName, packTitle, onClose }: Pack
               <button
                 className="btn-primary text-sm"
                 onClick={handleSave}
-                disabled={saving || loading}
+                disabled={saving || loading || minMemory > maxMemory}
               >
                 {saving ? 'Speichern…' : 'Speichern'}
               </button>

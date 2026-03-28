@@ -62,8 +62,8 @@ export const ipc = {
     },
 
     /** Fetch the pack logo as a base64 data URL, or null if unavailable. */
-    getLogo(location: string, name: string): Promise<string | null> {
-      return window.electronAPI.packsGetLogo(location, name)
+    getLogo(location: string, name: string, logo?: string): Promise<string | null> {
+      return window.electronAPI.packsGetLogo(location, name, logo)
     },
   },
 
@@ -91,16 +91,8 @@ export const ipc = {
      * A handler for that channel must be registered in the install service on
      * the main-process side (e.g. ipcMain.handle('install:get-installed', ...)).
      */
-    getInstalled(): Promise<ModpackManifest[]> {
-      // window.electronAPI is typed via ElectronAPI in @shared/types.
-      // This channel is an extension not yet present in that interface; cast
-      // through unknown to avoid touching the shared type until the handler is
-      // wired up on the main side.
-      return (
-        window.electronAPI as unknown as {
-          installGetInstalled(): Promise<ModpackManifest[]>
-        }
-      ).installGetInstalled()
+    getInstalled(): Promise<{ name: string; version: string }[]> {
+      return window.electronAPI.installGetInstalled()
     },
   },
 

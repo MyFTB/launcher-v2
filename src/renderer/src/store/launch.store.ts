@@ -106,9 +106,13 @@ export const useLaunchStore = create<LaunchStoreState>()((set) => ({
     })
 
     // Individual log lines streamed from the Minecraft process.
+    // Cap at 5 000 lines to prevent unbounded memory growth.
     onEvent('launch:log', (...args: unknown[]) => {
       const event = args[0] as LaunchLogEvent
-      set((s) => ({ logLines: [...s.logLines, event.line] }))
+      set((s) => {
+        const next = [...s.logLines, event.line]
+        return { logLines: next.length > 5000 ? next.slice(next.length - 5000) : next }
+      })
     })
   },
 }))

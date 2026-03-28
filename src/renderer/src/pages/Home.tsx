@@ -71,6 +71,14 @@ export default function Home() {
       setProfiles(event.profiles)
       setSelectedUuid(event.selectedUuid)
       setIsLoggedIn(event.profiles.length > 0)
+      // Derive username from the newly selected profile so the greeting updates.
+      if (event.selectedUuid) {
+        const profile = event.profiles.find((p) => p.uuid === event.selectedUuid)
+        if (profile?.lastKnownUsername) {
+          setUsername(profile.lastKnownUsername)
+          localStorage.setItem('lastUsername', profile.lastKnownUsername)
+        }
+      }
     })
     return unsub
   }, [])

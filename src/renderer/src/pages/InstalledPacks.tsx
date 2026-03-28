@@ -1,9 +1,10 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
-import type { ModpackManifestReference, InstallProgressEvent } from '@shared/types'
+import type { ModpackManifestReference, InstallProgressEvent, Feature } from '@shared/types'
 import ModpackCard from '../components/ModpackCard'
 import ContextMenu from '../components/ContextMenu'
 import PackSettingsModal from '../components/PackSettingsModal'
 import ProgressModal from '../components/ProgressModal'
+import FeatureModal from '../components/FeatureModal'
 import { useNavigate } from 'react-router-dom'
 import { useLaunchStore } from '../store/launch.store'
 
@@ -34,6 +35,8 @@ export default function InstalledPacks() {
   const [updatingPack, setUpdatingPack] = useState<ModpackManifestReference | null>(null)
   const [updateProgress, setUpdateProgress] = useState<InstallProgressEvent | null>(null)
   const [updateResult, setUpdateResult] = useState<{ success: boolean; error?: string } | null>(null)
+  const [pendingFeaturesPack, setPendingFeaturesPack] = useState<ModpackManifestReference | null>(null)
+  const [pendingFeatures, setPendingFeatures] = useState<Feature[]>([])
   const updatingPackRef = useRef(updatingPack)
   const updatingTitleRef = useRef<string>('')
   useEffect(() => {
@@ -84,9 +87,19 @@ export default function InstalledPacks() {
       setUpdateResult(event)
       setUpdatingPack(null)
     })
+    const unsubFeatures = window.electronAPI.on('install:needs-features', (...args: unknown[]) => {
+      const event = args[0] as { features: Feature[] }
+      if (updatingPackRef.current) {
+        setPendingFeaturesPack(updatingPackRef.current)
+        setPendingFeatures(event.features)
+        setUpdatingPack(null)
+        setUpdateProgress(null)
+      }
+    })
     return () => {
       unsubProgress()
       unsubComplete()
+      unsubFeatures()
     }
   }, [loadPacks])
 
@@ -123,6 +136,24 @@ export default function InstalledPacks() {
 
   const handleUpdateDismiss = useCallback(() => {
     setUpdateResult(null)
+  }, [])
+
+  const handleFeatureConfirm = useCallback((selectedFeatures: string[]) => {
+    if (!pendingFeaturesPack) return
+    const pack = pendingFeaturesPack
+    setPendingFeaturesPack(null)
+    setPendingFeatures([])
+    setUpdatingPack(pack)
+    window.electronAPI.installModpack(pack, selectedFeatures).catch((err) => {
+      console.error('Update with features error', err)
+      setUpdatingPack(null)
+      setUpdateProgress(null)
+    })
+  }, [pendingFeaturesPack])
+
+  const handleFeatureCancel = useCallback(() => {
+    setPendingFeaturesPack(null)
+    setPendingFeatures([])
   }, [])
 
   const handleContextMenu = useCallback((e: React.MouseEvent, packName: string) => {
@@ -322,6 +353,15 @@ export default function InstalledPacks() {
           successText="Erfolgreich aktualisiert!"
           onCancel={handleUpdateCancel}
           onDismiss={handleUpdateDismiss}
+        />
+      )}
+
+      {/* Feature selection modal (triggered during update if pack has optional features) */}
+      {pendingFeaturesPack && pendingFeatures.length > 0 && (
+        <FeatureModal
+          features={pendingFeatures}
+          onConfirm={handleFeatureConfirm}
+          onCancel={handleFeatureCancel}
         />
       )}
     </div>
