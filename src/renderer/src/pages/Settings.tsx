@@ -333,7 +333,7 @@ export default function Settings() {
               onClick={handleChangeDataDir}
               disabled={dataDirChanging}
             >
-              {dataDirChanging ? 'Verschiebe...' : 'Aendern...'}
+              {dataDirChanging ? 'Verschiebe...' : 'Ändern...'}
             </button>
           </div>
           {dataDirError && (
