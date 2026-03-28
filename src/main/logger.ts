@@ -92,13 +92,33 @@ class Logger {
 
   // ── Lifecycle ──────────────────────────────────────────────────────────────
 
+  /** Maximum log file size in bytes before truncation (5 MB). */
+  private static readonly MAX_LOG_SIZE = 5 * 1024 * 1024
+
   /**
    * Set the directory where `launcher.log` will be written.
    * Must be called once after `app.whenReady()`:
    *   logger.init(app.getPath('logs'))
+   *
+   * Truncates an existing log file if it exceeds MAX_LOG_SIZE.
    */
   init(logsDir: string): void {
     this.logPath = path.join(logsDir, 'launcher.log')
+
+    // Truncate oversized log from previous sessions
+    try {
+      const stat = fs.statSync(this.logPath)
+      if (stat.size > Logger.MAX_LOG_SIZE) {
+        const buf = fs.readFileSync(this.logPath, 'utf8')
+        // Keep only the last portion that fits within the limit
+        const trimmed = buf.slice(buf.length - Logger.MAX_LOG_SIZE)
+        // Start from the first full line to avoid a partial opening line
+        const firstNewline = trimmed.indexOf('\n')
+        fs.writeFileSync(this.logPath, firstNewline >= 0 ? trimmed.slice(firstNewline + 1) : trimmed, 'utf8')
+      }
+    } catch {
+      // File may not exist yet - that's fine
+    }
   }
 
   /**

@@ -60,7 +60,7 @@ export function registerIpcHandlers(): void {
   }))
 
   ipcMain.handle(IpcChannels.SYSTEM_OPEN_URL, async (_e, { url }: { url: string }) => {
-    const trusted = ['myftb.de', 'minecraft.net', 'microsoft.com', 'live.com']
+    const trusted = ['myftb.de', 'minecraft.net', 'microsoft.com', 'live.com', 'discord.gg']
     try {
       const { hostname, protocol } = new URL(url)
       const isSafeProtocol = protocol === 'https:' || protocol === 'http:'
@@ -74,7 +74,13 @@ export function registerIpcHandlers(): void {
 
   // ── Window controls ─────────────────────────────────────────
   // ── Console window ──────────────────────────────────────────
+  let consoleWindow: BrowserWindow | null = null
+
   ipcMain.handle('window:open-console', () => {
+    if (consoleWindow && !consoleWindow.isDestroyed()) {
+      consoleWindow.focus()
+      return
+    }
     const win = new BrowserWindow({
       width: 900,
       height: 580,
@@ -91,6 +97,8 @@ export function registerIpcHandlers(): void {
       },
       show: false,
     })
+    consoleWindow = win
+    win.on('closed', () => { consoleWindow = null })
     win.on('ready-to-show', () => win.show())
     if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
       win.loadURL(process.env['ELECTRON_RENDERER_URL'] + '?standalone=1')

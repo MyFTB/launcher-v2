@@ -361,6 +361,10 @@ function waitForOauthCallback(
   })
 }
 
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+}
+
 /** Generate a minimal self-closing HTML page shown in the user's browser. */
 function buildCallbackHtml(success: boolean, errorMessage?: string): string {
   if (success) {
@@ -370,10 +374,11 @@ function buildCallbackHtml(success: boolean, errorMessage?: string): string {
   <p>You can close this tab and return to the launcher.</p>
 </body></html>`
   }
+  const safeMessage = escapeHtml(errorMessage ?? 'An unknown error occurred.')
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>MyFTB Launcher</title></head>
 <body style="font-family:sans-serif;text-align:center;padding:60px;background:#1a1a1a;color:#fff">
   <h2>Login failed</h2>
-  <p>${errorMessage ?? 'An unknown error occurred.'}</p>
+  <p>${safeMessage}</p>
   <p>Please close this tab and try again from the launcher.</p>
 </body></html>`
 }

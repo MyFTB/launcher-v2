@@ -8,9 +8,10 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 // suppressed without hiding real issues.
 setMaxListeners(30)
 import { registerIpcHandlers } from './ipc/router'
+import { IpcChannels } from './ipc/channels'
 import { configService } from './services/config.service'
 import { launchService } from './services/launch.service'
-import { setMainWindow, setLaunchPackArg, getMainWindow } from './app-state'
+import { setMainWindow, setLaunchPackArg, getLaunchPackArg, getMainWindow } from './app-state'
 import { logger } from './logger'
 
 // ── CLI: --pack <name> ───────────────────────────────────────
@@ -55,6 +56,13 @@ function createWindow(): void {
 
   mainWindow.on('ready-to-show', () => {
     mainWindow.show()
+    // Deliver any deep link that arrived before the window was created (macOS cold start).
+    // Route through setLaunchPackArg so the RENDERER_ARRIVED handler delivers it
+    // after the renderer has fully initialised its event listeners.
+    if (pendingDeepLink) {
+      handlePendingDeepLink(pendingDeepLink)
+      pendingDeepLink = null
+    }
   })
 
   // Open external links in default browser
@@ -131,26 +139,47 @@ app.on('second-instance', (_event, commandLine, _workingDirectory, additionalDat
   } else if ((additionalData as { launchPackArg?: string }).launchPackArg) {
     const packName = (additionalData as { launchPackArg: string }).launchPackArg
     logger.info(`[Launcher] Second instance: forwarding pack launch for "${packName}"`)
-    getMainWindow()?.webContents.send('internal:launch-pack', packName)
+    getMainWindow()?.webContents.send(IpcChannels.LAUNCH_PACK, packName)
   }
 })
 
-// macOS deep link
+// macOS deep link — may fire before the window exists on cold start
+let pendingDeepLink: string | null = null
 app.on('open-url', (_event, url) => {
-  handleDeepLink(url)
+  if (getMainWindow()) {
+    handleDeepLink(url)
+  } else {
+    pendingDeepLink = url
+  }
 })
 
-function handleDeepLink(url: string): void {
+function parseDeepLinkPackName(url: string): string | null {
   try {
     const parsed = new URL(url)
     if (parsed.hostname === 'pack' || parsed.pathname.startsWith('/pack/')) {
-      const packName = parsed.hostname === 'pack'
+      return parsed.hostname === 'pack'
         ? parsed.pathname.replace(/^\//, '')
         : parsed.pathname.replace('/pack/', '')
-      logger.info(`[Launcher] Deep link: launching pack "${packName}"`)
-      getMainWindow()?.webContents.send('internal:launch-pack', packName)
     }
   } catch {
     // ignore malformed URLs
+  }
+  return null
+}
+
+function handleDeepLink(url: string): void {
+  const packName = parseDeepLinkPackName(url)
+  if (packName) {
+    logger.info(`[Launcher] Deep link: launching pack "${packName}"`)
+    getMainWindow()?.webContents.send(IpcChannels.LAUNCH_PACK, packName)
+  }
+}
+
+/** Queue a deep link for delivery via the RENDERER_ARRIVED flow (macOS cold start). */
+function handlePendingDeepLink(url: string): void {
+  const packName = parseDeepLinkPackName(url)
+  if (packName && !getLaunchPackArg()) {
+    logger.info(`[Launcher] Queuing deep link pack "${packName}" for renderer arrival`)
+    setLaunchPackArg(packName)
   }
 }

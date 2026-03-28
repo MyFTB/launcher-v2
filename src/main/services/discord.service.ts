@@ -22,6 +22,9 @@ class DiscordService {
    */
   private updateInterval: ReturnType<typeof setInterval> | null = null
 
+  /** Timeout handle for pending reconnect attempts, cleared in teardown. */
+  private reconnectTimeout: ReturnType<typeof setTimeout> | null = null
+
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
   /**
@@ -89,7 +92,7 @@ class DiscordService {
       this.ready = false
       this.stopUpdateLoop()
       // Wait 30 s before retrying so we don't spam reconnect attempts.
-      setTimeout(() => this.connect(), 30_000)
+      this.reconnectTimeout = setTimeout(() => this.connect(), 30_000)
     })
 
     client
@@ -99,13 +102,18 @@ class DiscordService {
         logger.warn('[DiscordService] Could not connect to Discord:', err)
         this.ready = false
         // Retry after 60 s in case Discord is launched later.
-        setTimeout(() => this.connect(), 60_000)
+        this.reconnectTimeout = setTimeout(() => this.connect(), 60_000)
       })
   }
 
   private teardown(): void {
     this.stopUpdateLoop()
     this.ready = false
+
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout)
+      this.reconnectTimeout = null
+    }
 
     if (this.client) {
       try {

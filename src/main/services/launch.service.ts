@@ -26,7 +26,6 @@ import type {
   LaunchCreateShortcutPayload,
   LaunchStateEvent,
   LaunchLogEvent,
-  ModpackManifest,
   ModpackManifestReference,
   LauncherProfile,
 } from '../../shared/types'
@@ -34,7 +33,8 @@ import type {
 // ─── Discord service (optional — may not be present in all builds) ───────────
 
 function getDiscordService(): {
-  setRunningModpack(manifest: ModpackManifest | null): void
+  setPlaying(packTitle: string): void
+  setIdle(): void
 } | null {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -150,8 +150,9 @@ async function fetchRemoteReference(
   try {
     const response = await fetch(url, { signal: controller.signal })
     if (!response.ok) return null
-    const list = (await response.json()) as ModpackManifestReference[]
-    return list.find((r) => r.name === packName) ?? null
+    const list = (await response.json()) as ModpackManifestReference[] | { packages?: ModpackManifestReference[] }
+    const data = Array.isArray(list) ? list : list.packages ?? []
+    return data.find((r) => r.name === packName) ?? null
   } catch {
     return null
   } finally {
@@ -372,7 +373,7 @@ class LaunchService {
           lastPlayedPacks: [
             packName,
             ...prevConfig.lastPlayedPacks.filter((n) => n !== packName),
-          ].slice(0, 10),
+          ].slice(0, Constants.recentPacksMax),
         })
         configService.save().catch((err) => {
           logger.error('[LaunchService] Failed to save lastPlayedPacks:', err)
@@ -380,7 +381,7 @@ class LaunchService {
 
         // Discord presence
         try {
-          getDiscordService()?.setRunningModpack(manifest)
+          getDiscordService()?.setPlaying(manifest.title)
         } catch {
           // Non-fatal
         }
@@ -418,7 +419,7 @@ class LaunchService {
 
           // Clear Discord presence
           try {
-            getDiscordService()?.setRunningModpack(null)
+            getDiscordService()?.setIdle()
           } catch {
             // Non-fatal
           }
@@ -566,8 +567,8 @@ class LaunchService {
             }
           }
 
-          // Strip newlines so pack name cannot inject extra .desktop file entries
-          const safePackName = packName.replace(/[\n\r]/g, ' ').trim()
+          // Strip newlines and quotes so pack name cannot inject .desktop entries or break Exec=
+          const safePackName = packName.replace(/[\n\r"\\$`]/g, ' ').trim()
           const desktopEntry = [
             '[Desktop Entry]',
             'Type=Application',

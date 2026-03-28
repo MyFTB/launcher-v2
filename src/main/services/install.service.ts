@@ -608,11 +608,15 @@ class InstallService {
 
     signal.throwIfAborted()
 
-    // Remove files from old manifest that are no longer present in the current one
+    // Remove files from old manifest that are no longer present in the current one.
+    // When selectedFeatures is empty (auto-update), skip old tasks that have a
+    // feature condition to avoid deleting the user's previously selected feature files.
     if (oldManifest?.tasks) {
       const currentToPaths = new Set(tasks.map((t) => t.to))
+      const isAutoUpdate = selectedFeatures.length === 0
       let staleCount = 0
       for (const oldTask of oldManifest.tasks) {
+        if (isAutoUpdate && oldTask.when) continue
         if (!currentToPaths.has(oldTask.to)) {
           const stale = path.join(instanceDir, oldTask.to)
           await fs.unlink(stale).catch(() => {

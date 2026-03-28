@@ -4,12 +4,16 @@ import { HashRouter } from 'react-router-dom'
 import App from './App'
 import ConsoleStandalone from './ConsoleStandalone'
 import { useLaunchStore } from './store/launch.store'
+import { useAuthStore } from './store/auth.store'
+import { useModpackStore } from './store/modpack.store'
 import '@fontsource-variable/outfit'
 import './index.css'
 
 // Wire push-event listeners that drive store state.
 // initListeners() is idempotent and must be called before any component mounts.
 useLaunchStore.getState().initListeners()
+useAuthStore.getState().initListeners()
+useModpackStore.getState().initListeners()
 
 const isStandalone = new URLSearchParams(window.location.search).has('standalone')
 
