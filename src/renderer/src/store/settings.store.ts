@@ -36,11 +36,6 @@ interface SettingsState {
    * Does nothing if config hasn't been loaded yet.
    */
   update(partial: Partial<LauncherConfig>): void
-  /**
-   * Open the OS directory picker and, if the user chose a path, update
-   * config.installationDir and mark dirty.
-   */
-  pickDir(): Promise<void>
   /** Open the launcher log directory in the OS file explorer. */
   openLogs(): Promise<void>
 }
@@ -73,13 +68,6 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
     const { config } = get()
     if (config === null) return
     set({ config: { ...config, ...partial }, dirty: true })
-  },
-
-  async pickDir() {
-    const chosen = await ipc.config.pickDir()
-    if (chosen !== null) {
-      get().update({ installationDir: chosen })
-    }
   },
 
   async openLogs() {

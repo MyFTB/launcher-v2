@@ -67,7 +67,6 @@ function PackKeyInput({ value, onChange }: { value: string; onChange: (v: string
 
 interface FormState {
   packKey: string
-  installationDir: string
   jvmArgs: string
   maxMemory: number
   minMemory: number
@@ -80,7 +79,6 @@ interface FormState {
 function formFromConfig(c: LauncherConfig): FormState {
   return {
     packKey: c.packKey ?? '',
-    installationDir: c.installationDir ?? '',
     jvmArgs: c.jvmArgs ?? '',
     maxMemory: c.maxMemory ?? 4096,
     minMemory: c.minMemory ?? 2048,
@@ -94,7 +92,6 @@ function formFromConfig(c: LauncherConfig): FormState {
 export default function Settings() {
   const [form, setForm] = useState<FormState>({
     packKey: '',
-    installationDir: '',
     jvmArgs: '',
     maxMemory: 4096,
     minMemory: 2048,
@@ -172,11 +169,6 @@ export default function Settings() {
     () => original !== null && JSON.stringify(form) !== JSON.stringify(original),
     [form, original]
   )
-
-  const handlePickDir = useCallback(async () => {
-    const dir = await window.electronAPI.configPickDir()
-    if (dir) setForm((prev) => ({ ...prev, installationDir: dir }))
-  }, [])
 
   const handleChangeDataDir = useCallback(async () => {
     setDataDirChanging(true)
@@ -327,10 +319,10 @@ export default function Settings() {
         {/* Data Directory */}
         <div>
           <label className="block text-xs font-medium text-text-secondary mb-1.5">
-            Speicherort (Datenverzeichnis)
+            Speicherort
           </label>
           <p className="text-xs text-text-muted mb-2">
-            Hier werden Konfiguration, Logs, Java-Runtimes und der Cache gespeichert.
+            Hier werden Modpacks, Konfiguration, Logs, Java-Runtimes und der Cache gespeichert.
           </p>
           <div className="flex gap-2 items-center">
             <span className="input flex-1 text-text-secondary truncate cursor-default select-all">
@@ -347,25 +339,6 @@ export default function Settings() {
           {dataDirError && (
             <p className="text-xs text-red-400 mt-1">{dataDirError}</p>
           )}
-        </div>
-
-        {/* Install Directory */}
-        <div>
-          <label className="block text-xs font-medium text-text-secondary mb-1.5">
-            Installationsverzeichnis
-          </label>
-          <div className="flex gap-2">
-            <input
-              type="text"
-              className="input flex-1"
-              placeholder="Ordner wählen..."
-              value={form.installationDir}
-              onChange={(e) => update('installationDir', e.target.value)}
-            />
-            <button className="btn-secondary shrink-0" onClick={handlePickDir}>
-              Durchsuchen
-            </button>
-          </div>
         </div>
 
         {/* Allow Webstart */}
