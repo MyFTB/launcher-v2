@@ -304,7 +304,7 @@ class InstallService {
     } catch (err: unknown) {
       if ((err as Error).name === 'AbortError') {
         logger.info(`[InstallService] Install cancelled: ${manifest.name}`)
-        const complete: InstallCompleteEvent = { success: false, error: 'Installation cancelled' }
+        const complete: InstallCompleteEvent = { success: false, error: 'Installation abgebrochen' }
         pushEvent(IpcChannels.INSTALL_COMPLETE, complete)
       } else {
         logger.error('[InstallService] Install failed:', err)
@@ -339,7 +339,7 @@ class InstallService {
       total: 0,
       finished: 0,
       failed: 0,
-      currentFile: `Fetching Minecraft version list...`,
+      currentFile: 'Minecraft-Versionsliste wird geladen...',
     } satisfies InstallProgressEvent)
 
     signal.throwIfAborted()
@@ -356,7 +356,7 @@ class InstallService {
       total: 0,
       finished: 0,
       failed: 0,
-      currentFile: `Installing Minecraft ${manifest.gameVersion}...`,
+      currentFile: `Minecraft ${manifest.gameVersion} wird installiert...`,
     } satisfies InstallProgressEvent)
 
     await installMinecraft(targetVersion, minecraftDir, { dispatcher: xmclDownloadDispatcher })
@@ -370,7 +370,7 @@ class InstallService {
       total: 0,
       finished: 0,
       failed: 0,
-      currentFile: 'Preparing Java runtime...',
+      currentFile: 'Java-Laufzeitumgebung wird vorbereitet...',
     } satisfies InstallProgressEvent)
 
     await ensureRuntime(
@@ -394,7 +394,7 @@ class InstallService {
         total: 0,
         finished: 0,
         failed: 0,
-        currentFile: `Installing Forge ${forgeEntry.version}...`,
+        currentFile: `Forge ${forgeEntry.version} wird installiert...`,
       } satisfies InstallProgressEvent)
 
       logger.info(`[InstallService] Installing Forge ${forgeEntry.version}...`)
@@ -409,7 +409,7 @@ class InstallService {
         total: 0,
         finished: 0,
         failed: 0,
-        currentFile: `Installing NeoForge ${neoforgeVersion}...`,
+        currentFile: `NeoForge ${neoforgeVersion} wird installiert...`,
       } satisfies InstallProgressEvent)
 
       await installNeoForged('neoforge', neoforgeVersion, minecraftDir, { java: javaPath, dispatcher: xmclDownloadDispatcher })
@@ -446,7 +446,7 @@ class InstallService {
         total: 0,
         finished: 0,
         failed: 0,
-        currentFile: `Installing ${loader === 'fabric' ? 'Fabric' : 'Quilt'} ${loaderVersion}...`,
+        currentFile: `${loader === 'fabric' ? 'Fabric' : 'Quilt'} ${loaderVersion} wird installiert...`,
       } satisfies InstallProgressEvent)
 
       // installFabric writes the version JSON AND downloads the loader libraries
@@ -626,7 +626,7 @@ class InstallService {
 
     // ── Complete ──────────────────────────────────────────────────────────────
     const success = failed === 0
-    const complete: InstallCompleteEvent = { success, error: success ? undefined : `${failed} file(s) failed to download` }
+    const complete: InstallCompleteEvent = { success, error: success ? undefined : `${failed} Datei(en) konnten nicht heruntergeladen werden` }
     pushEvent(IpcChannels.INSTALL_COMPLETE, complete)
   }
 

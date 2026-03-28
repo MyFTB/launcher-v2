@@ -14,17 +14,17 @@ export default function TitleBar({ title = 'MyFTB Launcher' }: { title?: string 
         <div className="flex items-center gap-1 no-drag">
           <button
             className="w-4 h-4 rounded-full bg-bg-overlay hover:bg-yellow-500 transition-colors"
-            title="Minimize"
+            title="Minimieren"
             onClick={() => window.electronAPI.windowMinimize()}
           />
           <button
             className="w-4 h-4 rounded-full bg-bg-overlay hover:bg-green-500 transition-colors"
-            title="Maximize"
+            title="Maximieren"
             onClick={() => window.electronAPI.windowMaximize()}
           />
           <button
             className="w-4 h-4 rounded-full bg-bg-overlay hover:bg-red-500 transition-colors"
-            title="Close"
+            title="Schließen"
             onClick={() => window.electronAPI.windowClose()}
           />
         </div>
