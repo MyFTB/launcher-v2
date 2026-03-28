@@ -27,6 +27,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Add relocatable data directory implementation plan
 - Update CHANGELOG.md for v2.1.0-experimental.1 [skip ci]
 - Update CHANGELOG.md for v2.1.0-experimental.2 [skip ci]
+- Update CHANGELOG.md for v2.1.0-experimental.2 [skip ci]
 
 ### 🚀 Features
 
