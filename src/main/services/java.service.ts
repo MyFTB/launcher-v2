@@ -340,7 +340,9 @@ export async function ensureRuntime(
 
   onProgress({ total, finished, failed, currentFile: 'Downloading JRE index...' })
 
-  const indexRes = await fetch(runtimeIndexUrl, { signal })
+  const indexRes = await fetch(runtimeIndexUrl, {
+    signal: AbortSignal.any([signal, AbortSignal.timeout(Constants.connectTimeoutMs)]),
+  })
   if (!indexRes.ok) {
     throw new Error(
       `Failed to fetch runtime index "${runtimeIndexName}": ` +
@@ -365,7 +367,9 @@ export async function ensureRuntime(
     await fs.mkdir(path.dirname(dest), { recursive: true })
 
     try {
-      const res = await fetch(obj.url, { signal })
+      const res = await fetch(obj.url, {
+        signal: AbortSignal.any([signal, AbortSignal.timeout(Constants.socketTimeoutMs)]),
+      })
       if (!res.ok) {
         throw new Error(`HTTP ${res.status} ${res.statusText} for ${obj.url}`)
       }

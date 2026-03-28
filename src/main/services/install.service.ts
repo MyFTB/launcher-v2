@@ -16,6 +16,8 @@ import {
 } from '@xmcl/installer'
 import { Version } from '@xmcl/core'
 
+import { xmclDownloadDispatcher } from '../download-agent'
+
 import { IpcChannels } from '../ipc/channels'
 import { Constants, fmt } from '../constants'
 import { configService } from './config.service'
@@ -357,7 +359,7 @@ class InstallService {
       currentFile: `Installing Minecraft ${manifest.gameVersion}...`,
     } satisfies InstallProgressEvent)
 
-    await installMinecraft(targetVersion, minecraftDir)
+    await installMinecraft(targetVersion, minecraftDir, { dispatcher: xmclDownloadDispatcher })
 
     signal.throwIfAborted()
 
@@ -396,7 +398,7 @@ class InstallService {
       } satisfies InstallProgressEvent)
 
       logger.info(`[InstallService] Installing Forge ${forgeEntry.version}...`)
-      await installForge(forgeEntry, minecraftDir, { java: javaPath })
+      await installForge(forgeEntry, minecraftDir, { java: javaPath, dispatcher: xmclDownloadDispatcher })
 
       signal.throwIfAborted()
     } else if (loader === 'neoforge' && libraryName) {
@@ -410,7 +412,7 @@ class InstallService {
         currentFile: `Installing NeoForge ${neoforgeVersion}...`,
       } satisfies InstallProgressEvent)
 
-      await installNeoForged('neoforge', neoforgeVersion, minecraftDir, { java: javaPath })
+      await installNeoForged('neoforge', neoforgeVersion, minecraftDir, { java: javaPath, dispatcher: xmclDownloadDispatcher })
 
       // installNeoForged creates the version JSON under the installer's own ID
       // (e.g. '1.21.1-neoforge-21.1.219'), but manifest.versionManifest.id may
@@ -481,8 +483,8 @@ class InstallService {
     } satisfies InstallProgressEvent)
 
     const resolvedVersion = await Version.parse(minecraftDir, manifest.versionManifest.id)
-    await installResolvedLibraries(resolvedVersion.libraries, minecraftDir)
-    await installAssets(resolvedVersion)
+    await installResolvedLibraries(resolvedVersion.libraries, minecraftDir, { dispatcher: xmclDownloadDispatcher })
+    await installAssets(resolvedVersion, { dispatcher: xmclDownloadDispatcher })
 
     signal.throwIfAborted()
 

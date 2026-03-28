@@ -35,6 +35,41 @@ import path from 'node:path'
 
 type LogLevel = 'DEBUG' | 'INFO ' | 'WARN ' | 'ERROR'
 
+// ─── Exported helpers ──────────────────────────────────────────────────────────
+
+/**
+ * Serialise a single log argument to a string.
+ * Exported for unit testing.
+ *
+ * AggregateError is handled specially: its .message is always empty, so we
+ * extract the first child error message and append a count of the remainder.
+ */
+export function formatLogArg(a: unknown): string {
+  // AggregateError extends Error but has an empty .message — the real
+  // information lives in .errors[].  Must be checked before instanceof Error.
+  if (a instanceof AggregateError) {
+    const base = a.stack ?? a.constructor.name
+    if (a.errors.length === 0) return base
+    const first = a.errors[0]
+    const firstMsg = first instanceof Error
+      ? (first.message || first.constructor.name)
+      : String(first)
+    const extra = a.errors.length > 1 ? ` (+${a.errors.length - 1} more)` : ''
+    return `${base}\n  Caused by: ${firstMsg}${extra}`
+  }
+  if (a instanceof Error) {
+    return a.stack ?? `${a.constructor.name}: ${a.message}`
+  }
+  if (typeof a === 'object' && a !== null) {
+    try {
+      return JSON.stringify(a)
+    } catch {
+      return String(a)
+    }
+  }
+  return String(a)
+}
+
 // ─── Logger ────────────────────────────────────────────────────────────────────
 
 class Logger {
@@ -102,21 +137,7 @@ class Logger {
 
   /** Serialise log arguments to a single string. */
   private formatArgs(args: unknown[]): string {
-    return args
-      .map((a) => {
-        if (a instanceof Error) {
-          return a.stack ?? `${a.constructor.name}: ${a.message}`
-        }
-        if (typeof a === 'object' && a !== null) {
-          try {
-            return JSON.stringify(a)
-          } catch {
-            return String(a)
-          }
-        }
-        return String(a)
-      })
-      .join(' ')
+    return args.map(formatLogArg).join(' ')
   }
 
   private log(level: LogLevel, args: unknown[]): void {
