@@ -6,6 +6,8 @@ import { app } from 'electron'
 
 import { LauncherConfig, DEFAULT_CONFIG } from '../../shared/types'
 import { logger } from '../logger'
+import { writeDataDirPointer } from '../bootstrap'
+import { validateMigrationTarget } from '../../shared/migrate-validation'
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -186,6 +188,91 @@ class ConfigService {
     if (this.config.clientToken === '') {
       this.config.clientToken = crypto.randomUUID()
       await this.save()
+    }
+  }
+
+  // ── Data directory migration ─────────────────────────────────────────────
+
+  /**
+   * Migrate all launcher data from the current userData to a new directory.
+   *
+   * 1. Validates the target path
+   * 2. Tests write access
+   * 3. Recursively copies userData contents to target
+   * 4. If installationDir pointed to old instances path, clears it so the fallback kicks in
+   * 5. Writes the bootstrap pointer file
+   *
+   * Returns `{ success: true }` or `{ success: false, error: string }`.
+   * Caller is responsible for restarting the app after success.
+   */
+  async migrateDataDir(targetDir: string): Promise<{ success: boolean; error?: string }> {
+    const currentDir = app.getPath('userData')
+
+    const validation = validateMigrationTarget(currentDir, targetDir)
+    if (!validation.ok) {
+      const messages: Record<string, string> = {
+        'already-current': 'Das ist bereits der aktuelle Speicherort.',
+        nested: 'Der Zielordner darf nicht innerhalb des aktuellen Speicherorts liegen (oder umgekehrt).',
+        empty: 'Bitte waehle einen Ordner.',
+      }
+      return { success: false, error: messages[validation.error] }
+    }
+
+    // Ensure target exists and is writable
+    try {
+      await fs.mkdir(targetDir, { recursive: true })
+      const testFile = path.join(targetDir, '.myftb-write-test')
+      await fs.writeFile(testFile, 'test', 'utf8')
+      await fs.unlink(testFile)
+    } catch {
+      return { success: false, error: 'Der Zielordner ist nicht beschreibbar.' }
+    }
+
+    // Recursive copy
+    try {
+      await this.recursiveCopy(currentDir, targetDir)
+    } catch (err) {
+      logger.error('[ConfigService] Migration copy failed:', err)
+      return { success: false, error: 'Fehler beim Kopieren der Daten.' }
+    }
+
+    // If installationDir pointed to the old instances path, clear it
+    // so getInstallDir() falls back to <newUserData>/instances
+    const oldInstancesPath = path.join(currentDir, 'instances')
+    if (
+      this.config.installationDir &&
+      path.resolve(this.config.installationDir) === path.resolve(oldInstancesPath)
+    ) {
+      this.config.installationDir = ''
+      const newConfigPath = path.join(targetDir, 'config.json')
+      await fs.writeFile(newConfigPath, JSON.stringify(this.config, null, 2), 'utf8')
+    }
+
+    // Write bootstrap pointer file
+    try {
+      writeDataDirPointer(targetDir)
+    } catch (err) {
+      logger.error('[ConfigService] Failed to write pointer file:', err)
+      return { success: false, error: 'Fehler beim Schreiben der Konfiguration.' }
+    }
+
+    logger.info(`[ConfigService] Data directory migrated: ${currentDir} -> ${targetDir}`)
+    return { success: true }
+  }
+
+  /** Recursively copy a directory tree, skipping Electron lock files. */
+  private async recursiveCopy(src: string, dest: string): Promise<void> {
+    await fs.mkdir(dest, { recursive: true })
+    const entries = await fs.readdir(src, { withFileTypes: true })
+    for (const entry of entries) {
+      if (entry.name === 'SingletonLock' || entry.name === 'lockfile') continue
+      const srcPath = path.join(src, entry.name)
+      const destPath = path.join(dest, entry.name)
+      if (entry.isDirectory()) {
+        await this.recursiveCopy(srcPath, destPath)
+      } else {
+        await fs.copyFile(srcPath, destPath)
+      }
     }
   }
 }
