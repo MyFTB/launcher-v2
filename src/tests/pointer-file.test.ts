@@ -37,4 +37,8 @@ describe('parseDataDirPointer', () => {
   it('ignores extra keys', () => {
     expect(parseDataDirPointer('{"dataDir":"/data","version":2}')).toBe('/data')
   })
+
+  it('trims whitespace from dataDir', () => {
+    expect(parseDataDirPointer('{"dataDir":"  /data  "}')).toBe('/data')
+  })
 })

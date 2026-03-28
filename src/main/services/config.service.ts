@@ -233,7 +233,7 @@ class ConfigService {
       await this.recursiveCopy(currentDir, targetDir)
     } catch (err) {
       logger.error('[ConfigService] Migration copy failed:', err)
-      return { success: false, error: 'Fehler beim Kopieren der Daten.' }
+      return { success: false, error: 'Fehler beim Kopieren der Daten. Eventuell unvollstaendige Daten im Zielordner.' }
     }
 
     // If installationDir pointed to the old instances path, clear it
@@ -260,12 +260,16 @@ class ConfigService {
     return { success: true }
   }
 
-  /** Recursively copy a directory tree, skipping Electron lock files. */
+  /** Recursively copy a directory tree, skipping Electron ephemeral files and symlinks. */
   private async recursiveCopy(src: string, dest: string): Promise<void> {
+    const SKIP = new Set([
+      'SingletonLock', 'SingletonSocket', 'lockfile',
+      'Cache', 'GPUCache', 'Code Cache', 'DawnGraphiteCache',
+    ])
     await fs.mkdir(dest, { recursive: true })
     const entries = await fs.readdir(src, { withFileTypes: true })
     for (const entry of entries) {
-      if (entry.name === 'SingletonLock' || entry.name === 'lockfile') continue
+      if (SKIP.has(entry.name) || entry.isSymbolicLink()) continue
       const srcPath = path.join(src, entry.name)
       const destPath = path.join(dest, entry.name)
       if (entry.isDirectory()) {

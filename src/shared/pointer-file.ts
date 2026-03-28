@@ -8,7 +8,7 @@ export function parseDataDirPointer(raw: string): string | null {
   try {
     const parsed = JSON.parse(raw) as { dataDir?: unknown }
     if (typeof parsed.dataDir === 'string' && parsed.dataDir.trim().length > 0) {
-      return parsed.dataDir
+      return parsed.dataDir.trim()
     }
   } catch {
     // Corrupt or non-JSON content

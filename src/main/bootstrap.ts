@@ -51,5 +51,5 @@ export function readDataDirFromDisk(): string | null {
 export function writeDataDirPointer(dataDir: string): void {
   const dir = getBootstrapDir()
   mkdirSync(dir, { recursive: true })
-  writeFileSync(getPointerPath(), JSON.stringify({ dataDir }, null, 2), 'utf8')
+  writeFileSync(getPointerPath(), JSON.stringify({ dataDir }, null, 2) + '\n', 'utf8')
 }
