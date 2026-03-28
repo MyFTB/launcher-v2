@@ -6,7 +6,10 @@ export type MigrationValidation =
 
 /**
  * Validate that `target` is a legal migration destination given the `current` data dir.
- * Pure function - no I/O. Optional `platform` param defaults to process.platform.
+ * Pure function - no I/O.
+ *
+ * The `platform` parameter controls case-folding only (win32 = case-insensitive).
+ * Path resolution and separators always use the host OS via `path.resolve` / `path.sep`.
  */
 export function validateMigrationTarget(
   current: string,
