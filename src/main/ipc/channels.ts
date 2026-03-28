@@ -76,6 +76,8 @@ export const IpcChannels = {
   CONFIG_PICK_DIR: 'config:pick-dir',
   /** Renderer→Main: Open launcher log file directory */
   CONFIG_OPEN_LOGS: 'config:open-logs',
+  /** Renderer->Main: Pick new data directory, migrate, and restart */
+  CONFIG_CHANGE_DATA_DIR: 'config:change-data-dir',
 
   // ── System ───────────────────────────────────────────────────
   /** Renderer→Main: Get system info (platform, memory, etc.) */
