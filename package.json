@@ -1,6 +1,6 @@
 {
   "name": "myftb-launcher",
-  "version": "2.1.0-experimental.1",
+  "version": "2.1.0-experimental.2",
   "description": "MyFTB Minecraft Modpack Launcher",
   "main": "out/main/index.js",
   "scripts": {
