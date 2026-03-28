@@ -3,6 +3,42 @@
 All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [2.1.0-experimental.2] — 2026-03-28
+
+### ♻️ Refactoring
+
+- Code quality improvements and expanded test coverage
+- Merge install dir into single 'Speicherort' section
+
+### 🐛 Bug Fixes
+
+- Address 4 bugs found in code audit
+- Address code review findings
+- Comprehensive audit - 14 bug fixes and improvements
+- Enhance button accessibility with focus styles
+- Keep static button label during data dir change
+- Review feedback - trailing newlines, rename test, clarify JSDoc
+- Use proper umlaut in Ändern button label
+
+### 📚 Documentation
+
+- Add relocatable data directory design spec
+- Add relocatable data directory implementation plan
+- Update CHANGELOG.md for v2.1.0-experimental.1 [skip ci]
+
+### 🚀 Features
+
+- Add CONFIG_CHANGE_DATA_DIR IPC channel
+- Add IPC handler for data directory change
+- Add bootstrap module for sync pointer-file I/O
+- Add data directory section to Settings page
+- Add migrateDataDir method to ConfigService
+- Add migration target validation with tests
+- Add pointer-file parser with tests
+- Add undici package and update overrides in package.json  + npm audit fix
+- Implement shared undici dispatcher for downloads with enhanced timeout and retry logic
+- Wire bootstrap into app startup
+- Wire types, preload, and renderer IPC client
 ## [2.1.0-experimental.1] — 2026-03-23
 
 ### 🐛 Bug Fixes
