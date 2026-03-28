@@ -116,6 +116,9 @@ export default function Settings() {
   const formRef = useRef(form)
   useEffect(() => { formRef.current = form }, [form])
 
+  const [dataDirChanging, setDataDirChanging] = useState(false)
+  const [dataDirError, setDataDirError] = useState<string | null>(null)
+
   useEffect(() => {
     return () => {
       if (saveSuccessTimeoutRef.current) clearTimeout(saveSuccessTimeoutRef.current)
@@ -173,6 +176,21 @@ export default function Settings() {
   const handlePickDir = useCallback(async () => {
     const dir = await window.electronAPI.configPickDir()
     if (dir) setForm((prev) => ({ ...prev, installationDir: dir }))
+  }, [])
+
+  const handleChangeDataDir = useCallback(async () => {
+    setDataDirChanging(true)
+    setDataDirError(null)
+    try {
+      const result = await window.electronAPI.configChangeDataDir()
+      if (!result.success && result.error !== 'cancelled') {
+        setDataDirError(result.error ?? 'Unbekannter Fehler')
+      }
+    } catch (err) {
+      setDataDirError(err instanceof Error ? err.message : 'Fehler beim Verschieben')
+    } finally {
+      setDataDirChanging(false)
+    }
   }, [])
 
   const handleSave = useCallback(async () => {
@@ -304,6 +322,31 @@ export default function Settings() {
           <p className="text-xs text-text-muted mt-1">
             Zugangscodes für private Modpacks. Enter oder Komma zum Hinzufügen, Backspace zum Entfernen.
           </p>
+        </div>
+
+        {/* Data Directory */}
+        <div>
+          <label className="block text-xs font-medium text-text-secondary mb-1.5">
+            Speicherort (Datenverzeichnis)
+          </label>
+          <p className="text-xs text-text-muted mb-2">
+            Hier werden Konfiguration, Logs, Java-Runtimes und der Cache gespeichert.
+          </p>
+          <div className="flex gap-2 items-center">
+            <span className="input flex-1 text-text-secondary truncate cursor-default select-all">
+              {systemInfo?.dataDir ?? '...'}
+            </span>
+            <button
+              className="btn-secondary shrink-0"
+              onClick={handleChangeDataDir}
+              disabled={dataDirChanging}
+            >
+              {dataDirChanging ? 'Verschiebe...' : 'Aendern...'}
+            </button>
+          </div>
+          {dataDirError && (
+            <p className="text-xs text-red-400 mt-1">{dataDirError}</p>
+          )}
         </div>
 
         {/* Install Directory */}
