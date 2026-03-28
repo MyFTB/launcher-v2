@@ -201,6 +201,8 @@ export interface SystemInfoResult {
   totalMemoryMb: number
   arch: string
   launcherVersion: string
+  /** Current userData directory path */
+  dataDir: string
 }
 
 // Paste / crash
@@ -268,6 +270,7 @@ export interface ElectronAPI {
   configSave(config: Partial<LauncherConfig>): Promise<void>
   configPickDir(): Promise<string | null>
   configOpenLogs(): Promise<void>
+  configChangeDataDir(): Promise<{ success: boolean; error?: string }>
 
   // System
   systemInfo(): Promise<SystemInfoResult>

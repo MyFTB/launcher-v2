@@ -42,6 +42,7 @@ const api: ElectronAPI = {
   configSave: (config: Partial<LauncherConfig>) => ipcRenderer.invoke('config:save', config),
   configPickDir: () => ipcRenderer.invoke('config:pick-dir'),
   configOpenLogs: () => ipcRenderer.invoke('config:open-logs'),
+  configChangeDataDir: () => ipcRenderer.invoke('config:change-data-dir'),
 
   // ── System ────────────────────────────────────────────────
   systemInfo: () => ipcRenderer.invoke('system:info'),

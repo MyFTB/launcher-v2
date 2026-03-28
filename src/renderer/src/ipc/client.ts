@@ -161,6 +161,11 @@ export const ipc = {
     openLogs(): Promise<void> {
       return window.electronAPI.configOpenLogs()
     },
+
+    /** Pick a new data directory, migrate, and restart. */
+    changeDataDir(): Promise<{ success: boolean; error?: string }> {
+      return window.electronAPI.configChangeDataDir()
+    },
   },
 
   // ── System ─────────────────────────────────────────────────────────────────
