@@ -13,17 +13,17 @@ export default function TitleBar({ title = 'MyFTB Launcher' }: { title?: string 
       {process.platform !== 'darwin' && (
         <div className="flex items-center gap-1 no-drag">
           <button
-            className="w-4 h-4 rounded-full bg-bg-overlay hover:bg-yellow-500 transition-colors"
+            className="w-4 h-4 rounded-full bg-bg-overlay hover:bg-yellow-500 transition-colors outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1 focus-visible:ring-offset-bg-base"
             title="Minimieren"
             onClick={() => window.electronAPI.windowMinimize()}
           />
           <button
-            className="w-4 h-4 rounded-full bg-bg-overlay hover:bg-green-500 transition-colors"
+            className="w-4 h-4 rounded-full bg-bg-overlay hover:bg-green-500 transition-colors outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1 focus-visible:ring-offset-bg-base"
             title="Maximieren"
             onClick={() => window.electronAPI.windowMaximize()}
           />
           <button
-            className="w-4 h-4 rounded-full bg-bg-overlay hover:bg-red-500 transition-colors"
+            className="w-4 h-4 rounded-full bg-bg-overlay hover:bg-red-500 transition-colors outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1 focus-visible:ring-offset-bg-base"
             title="Schließen"
             onClick={() => window.electronAPI.windowClose()}
           />
