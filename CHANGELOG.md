@@ -16,6 +16,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Address code review findings
 - Comprehensive audit - 14 bug fixes and improvements
 - Enhance button accessibility with focus styles
+- Fall back to gh release create when no draft exists
 - Keep static button label during data dir change
 - Review feedback - trailing newlines, rename test, clarify JSDoc
 - Use proper umlaut in Ändern button label
@@ -25,6 +26,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Add relocatable data directory design spec
 - Add relocatable data directory implementation plan
 - Update CHANGELOG.md for v2.1.0-experimental.1 [skip ci]
+- Update CHANGELOG.md for v2.1.0-experimental.2 [skip ci]
 
 ### 🚀 Features
 
