@@ -1,6 +1,8 @@
 import { memo, useEffect, useState, useCallback, useRef, useMemo, KeyboardEvent } from 'react'
 import type { LauncherConfig, SystemInfoResult, LauncherProfile } from '@shared/types'
 import LoginModal from '../components/LoginModal'
+import MicrosoftIcon from '../components/icons/MicrosoftIcon'
+import { MINECRAFT_MIN_MB, RAM_STEP_MB, computeMaxMemoryMb, buildLandmarks, memLabel, clampMemory, ThumbLabel } from '../utils/memory-slider'
 
 // ─── PackKey chip input ────────────────────────────────────────────────────────
 
@@ -59,52 +61,6 @@ function PackKeyInput({ value, onChange }: { value: string; onChange: (v: string
         onKeyDown={handleKeyDown}
         onBlur={() => { if (input.trim()) addKey(input) }}
       />
-    </div>
-  )
-}
-
-const MINECRAFT_MIN_MB = 1024 // practical minimum to run Minecraft
-const RAM_CAP_RATIO = 0.75    // leave 25 % for OS + background processes
-const RAM_STEP_MB = 1024      // 1 GB slider steps
-
-/** Returns the recommended max allocatable RAM in MB (75 % of total, rounded to whole GB). */
-function computeMaxMemoryMb(totalRamMb: number | undefined): number {
-  if (!totalRamMb) return 16384
-  return Math.max(
-    MINECRAFT_MIN_MB,
-    Math.floor((totalRamMb * RAM_CAP_RATIO) / 1024) * 1024,
-  )
-}
-
-/**
- * Landmark values to label on the slider: 1 GB, then powers of 2 (4, 8, 16, …), then maxMb.
- * These are visual markers only — actual drag steps are RAM_STEP_MB (2 GB).
- */
-function buildLandmarks(maxMb: number): number[] {
-  const pts: number[] = [MINECRAFT_MIN_MB]
-  for (let gb = 4; gb * 1024 <= maxMb; gb *= 2) {
-    pts.push(gb * 1024)
-  }
-  if (pts[pts.length - 1] !== maxMb) pts.push(maxMb)
-  return pts
-}
-
-function memLabel(mb: number): string {
-  return mb >= 1024 ? `${mb / 1024} GB` : `${mb} MB`
-}
-
-function ThumbLabel({ value, min, max }: { value: number; min: number; max: number }) {
-  const pct = max === min ? 0 : ((value - min) / (max - min)) * 100
-  // Correct for thumb radius (~8px) so label tracks the actual thumb center
-  const offset = 8 - pct * 0.16
-  return (
-    <div className="relative h-5">
-      <span
-        style={{ left: `calc(${pct}% + ${offset}px)` }}
-        className="absolute -translate-x-1/2 text-xs font-semibold text-accent"
-      >
-        {value} MB
-      </span>
     </div>
   )
 }
@@ -242,10 +198,6 @@ export default function Settings() {
 
   const maxMemoryMb = computeMaxMemoryMb(systemInfo?.totalMemoryMb)
   const memoryLandmarks = useMemo(() => buildLandmarks(maxMemoryMb), [maxMemoryMb])
-
-  function clampMemory(mb: number, lo: number, hi: number): number {
-    return Math.max(lo, Math.min(hi, Math.round(mb / 1024) * 1024))
-  }
 
   const platformLabel = systemInfo
     ? { win32: 'Windows', darwin: 'macOS', linux: 'Linux' }[systemInfo.platform] ?? systemInfo.platform
@@ -659,13 +611,3 @@ const PlayerAvatar = memo(function PlayerAvatar({ uuid, username }: { uuid: stri
   )
 })
 
-function MicrosoftIcon() {
-  return (
-    <svg viewBox="0 0 21 21" className="w-4 h-4 shrink-0" fill="none">
-      <rect x="1" y="1" width="9" height="9" fill="#f25022" />
-      <rect x="11" y="1" width="9" height="9" fill="#00a4ef" />
-      <rect x="1" y="11" width="9" height="9" fill="#7fba00" />
-      <rect x="11" y="11" width="9" height="9" fill="#ffb900" />
-    </svg>
-  )
-}

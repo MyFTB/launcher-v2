@@ -1,7 +1,6 @@
 import path from 'node:path'
 import fs from 'node:fs/promises'
 import crypto from 'node:crypto'
-import { setMaxListeners } from 'node:events'
 import { ipcMain } from 'electron'
 
 import { configService } from './config.service'
@@ -23,18 +22,11 @@ import type {
  * Throws on network errors or non-2xx responses.
  */
 async function fetchWithTimeout(url: string): Promise<Response> {
-  const controller = new AbortController()
-  setMaxListeners(0, controller.signal)
-  const timer = setTimeout(() => controller.abort(), Constants.connectTimeoutMs)
-  try {
-    const response = await fetch(url, { signal: controller.signal })
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status} ${response.statusText} - ${url}`)
-    }
-    return response
-  } finally {
-    clearTimeout(timer)
+  const response = await fetch(url, { signal: AbortSignal.timeout(Constants.connectTimeoutMs) })
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status} ${response.statusText} - ${url}`)
   }
+  return response
 }
 
 /**

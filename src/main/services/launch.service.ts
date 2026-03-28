@@ -8,7 +8,6 @@ import path from 'node:path'
 import fs from 'node:fs/promises'
 import { createInterface } from 'node:readline'
 import { ChildProcess } from 'node:child_process'
-import { setMaxListeners } from 'node:events'
 import { ipcMain, shell, app, BrowserWindow } from 'electron'
 import { launch as xmclLaunch } from '@xmcl/core'
 
@@ -109,27 +108,19 @@ class Log4jParser {
  * Returns the full URL of the created paste.
  */
 async function uploadToPaste(text: string): Promise<string> {
-  const controller = new AbortController()
-  setMaxListeners(0, controller.signal)
-  const timer = setTimeout(() => controller.abort(), Constants.connectTimeoutMs)
+  const response = await fetch(`${Constants.pasteTarget}/documents`, {
+    method: 'POST',
+    // CodeQL[js/file-access-to-http]: user explicitly triggers log upload to paste.myftb.de for debugging
+    body: Buffer.from(text, 'utf-8'),
+    signal: AbortSignal.timeout(Constants.connectTimeoutMs),
+  })
 
-  try {
-    const response = await fetch(`${Constants.pasteTarget}/documents`, {
-      method: 'POST',
-      // CodeQL[js/file-access-to-http]: user explicitly triggers log upload to paste.myftb.de for debugging
-      body: Buffer.from(text, 'utf-8'),
-      signal: controller.signal,
-    })
-
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status} ${response.statusText}`)
-    }
-
-    const json = (await response.json()) as { key: string }
-    return `${Constants.pasteTarget}/${json.key}`
-  } finally {
-    clearTimeout(timer)
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status} ${response.statusText}`)
   }
+
+  const json = (await response.json()) as { key: string }
+  return `${Constants.pasteTarget}/${json.key}`
 }
 
 // ─── Fetch remote pack reference ─────────────────────────────────────────────
@@ -144,19 +135,14 @@ async function fetchRemoteReference(
   const packKey = configService.get().packKey
   const url = fmt(Constants.packList, packKey)
 
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), Constants.connectTimeoutMs)
-
   try {
-    const response = await fetch(url, { signal: controller.signal })
+    const response = await fetch(url, { signal: AbortSignal.timeout(Constants.connectTimeoutMs) })
     if (!response.ok) return null
     const list = (await response.json()) as ModpackManifestReference[] | { packages?: ModpackManifestReference[] }
     const data = Array.isArray(list) ? list : list.packages ?? []
     return data.find((r) => r.name === packName) ?? null
   } catch {
     return null
-  } finally {
-    clearTimeout(timer)
   }
 }
 

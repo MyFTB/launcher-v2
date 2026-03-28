@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import logoUrl from '../assets/logo.svg'
+import MicrosoftIcon from './icons/MicrosoftIcon'
 
 interface LoginModalProps {
   onClose: () => void
@@ -84,13 +85,3 @@ export default function LoginModal({ onClose }: LoginModalProps) {
   )
 }
 
-function MicrosoftIcon() {
-  return (
-    <svg viewBox="0 0 21 21" className="w-4 h-4 shrink-0" fill="none">
-      <rect x="1" y="1" width="9" height="9" fill="#f25022" />
-      <rect x="11" y="1" width="9" height="9" fill="#00a4ef" />
-      <rect x="1" y="11" width="9" height="9" fill="#7fba00" />
-      <rect x="11" y="11" width="9" height="9" fill="#ffb900" />
-    </svg>
-  )
-}

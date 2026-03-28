@@ -58,6 +58,12 @@ function detectModLoader(manifest: FakeManifest): { loader: string; libraryName:
     return { loader: 'forge', libraryName: `net.minecraftforge:forge:${mcVersion}-${forgeVersion}` }
   }
 
+  // Short-form NeoForge ID with no MC-version prefix, e.g. "neoforge-21.1.219"
+  const neoShortMatch = versionId.match(/^neoforge-(.+)$/)
+  if (neoShortMatch) {
+    return { loader: 'neoforge', libraryName: `net.neoforged:neoforge:${neoShortMatch[1]}` }
+  }
+
   if (versionId.startsWith('fabric-loader-')) return { loader: 'fabric', libraryName: versionId }
   if (versionId.startsWith('quilt-loader-')) return { loader: 'quilt', libraryName: versionId }
 
@@ -184,5 +190,29 @@ describe('detectModLoader', () => {
     // The synthetic name must produce a buildForgeEntry that installForge can use
     const entry = buildForgeEntry('1.20.1', libraryName!)
     expect(entry).toEqual({ mcversion: '1.20.1', version: '1.20.1-47.4.0' })
+  })
+
+  // ── NeoForge short-form ID (no MC version prefix) ─────────────────────────
+  it('detects NeoForge from short-form ID like neoforge-21.1.219', () => {
+    const m = { versionManifest: { id: 'neoforge-21.1.219', libraries: [] } }
+    expect(detectModLoader(m)).toEqual({
+      loader: 'neoforge',
+      libraryName: 'net.neoforged:neoforge:21.1.219',
+    })
+  })
+
+  it('NeoForge short-form synthesises correct Maven coordinate', () => {
+    const m = { versionManifest: { id: 'neoforge-21.4.42' } }
+    const result = detectModLoader(m)
+    expect(result.loader).toBe('neoforge')
+    expect(result.libraryName).toBe('net.neoforged:neoforge:21.4.42')
+  })
+
+  it('NeoForge short-form without libraries array', () => {
+    const m = { versionManifest: { id: 'neoforge-20.6.100' } }
+    expect(detectModLoader(m)).toEqual({
+      loader: 'neoforge',
+      libraryName: 'net.neoforged:neoforge:20.6.100',
+    })
   })
 })
