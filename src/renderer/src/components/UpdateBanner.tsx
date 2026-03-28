@@ -10,6 +10,7 @@ type UpdateState =
   | { status: 'idle' }
   | { status: 'available'; version: string }
   | { status: 'downloading'; percent: number; bytesPerSecond: number }
+  | { status: 'verifying' }
   | { status: 'downloaded'; version: string }
   | { status: 'error'; message: string }
 
@@ -22,10 +23,12 @@ export default function UpdateBanner() {
   const [state, setState] = useState<UpdateState>({ status: 'idle' })
   const [dismissed, setDismissed] = useState(false)
   const errorTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const stallTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     return () => {
       if (errorTimeoutRef.current) clearTimeout(errorTimeoutRef.current)
+      if (stallTimerRef.current) clearTimeout(stallTimerRef.current)
     }
   }, [])
 
@@ -39,10 +42,22 @@ export default function UpdateBanner() {
     const unsubProgress = window.electronAPI.on('update:progress', (...args: unknown[]) => {
       const event = args[0] as UpdateProgressEvent
       setState({ status: 'downloading', percent: event.percent, bytesPerSecond: event.bytesPerSecond })
+
+      // After download finishes, electron-updater verifies the file silently
+      // with no more progress events. Detect this stall and show a verifying state.
+      if (stallTimerRef.current) clearTimeout(stallTimerRef.current)
+      stallTimerRef.current = setTimeout(() => {
+        setState((prev) =>
+          prev.status === 'downloading' && prev.percent > 50
+            ? { status: 'verifying' }
+            : prev
+        )
+      }, 3000)
     })
 
     const unsubDownloaded = window.electronAPI.on('update:downloaded', (...args: unknown[]) => {
       const event = args[0] as UpdateDownloadedEvent
+      if (stallTimerRef.current) clearTimeout(stallTimerRef.current)
       setState({ status: 'downloaded', version: event.version })
       setDismissed(false)
     })
@@ -112,6 +127,17 @@ export default function UpdateBanner() {
           <span className="text-xs text-text-muted shrink-0">
             {formatSpeed(state.bytesPerSecond)}
           </span>
+        </div>
+      )}
+
+      {state.status === 'verifying' && (
+        <div className="flex items-center gap-3 px-4 py-2 bg-bg-elevated border-b border-border no-drag">
+          <span className="text-xs text-text-secondary shrink-0">
+            Wird verifiziert...
+          </span>
+          <div className="flex-1 h-1 bg-bg-overlay rounded-full overflow-hidden">
+            <div className="h-full bg-accent rounded-full w-full animate-pulse" />
+          </div>
         </div>
       )}
 
