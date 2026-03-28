@@ -1,5 +1,13 @@
 import { setMaxListeners } from 'node:events'
 import { app, BrowserWindow, shell } from 'electron'
+
+// ── Bootstrap: custom data directory (must run before app.whenReady) ──
+import { readDataDirFromDisk } from './bootstrap'
+const customDataDir = readDataDirFromDisk()
+if (customDataDir) {
+  app.setPath('userData', customDataDir)
+}
+
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 
