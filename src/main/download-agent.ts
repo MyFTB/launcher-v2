@@ -1,45 +1,50 @@
 /**
- * Shared undici dispatcher for all @xmcl/installer downloads.
+ * Shared undici dispatchers for all download operations.
  *
- * The @xmcl/file-transfer default agent uses a 10-second connect timeout and
- * does not retry on UND_ERR_CONNECT_TIMEOUT. Users on congested networks or
- * with slow Microsoft CDN routing regularly hit this limit when downloading
- * Minecraft assets (resources.download.minecraft.net).
+ * Two dispatchers are exported:
  *
- * This dispatcher:
- *   - Raises the connect timeout to Constants.connectTimeoutMs (30 s)
- *   - Retries up to 3 times with exponential back-off (1 s, 2 s, 4 s)
- *   - Explicitly retries on UND_ERR_CONNECT_TIMEOUT in addition to the
- *     standard network error codes
+ *   downloadDispatcher      — connection pool + extended timeout + redirect.
+ *                              Used by fetchWithRetry which handles retry itself.
+ *
+ *   xmclDownloadDispatcher  — same base config plus undici's built-in retry
+ *                              interceptor.  Passed to @xmcl/installer calls.
+ *
+ * Both raise the connect timeout to Constants.connectTimeoutMs (30 s) to cope
+ * with congested networks and slow CDN routing.
  */
 import { Agent, interceptors } from 'undici'
 import type { RetryHandler } from 'undici'
 
 import { Constants } from './constants'
 
-const RETRY_ERROR_CODES: string[] = [
-  // Standard Node.js network errors
-  'ECONNRESET',
-  'ECONNREFUSED',
-  'ENOTFOUND',
-  'ENETDOWN',
-  'ENETUNREACH',
-  'EHOSTDOWN',
-  'EHOSTUNREACH',
-  'EPIPE',
-  // undici errors
-  'UND_ERR_SOCKET',
-  'UND_ERR_CONNECT_TIMEOUT',
-]
+/**
+ * Base dispatcher: connection pool + extended connect timeout + redirect.
+ * No retry — fetchWithRetry applies its own retry strategy on top.
+ */
+export const downloadDispatcher = new Agent({
+  connections: 16,
+  connect: { timeout: Constants.connectTimeoutMs },
+}).compose(
+  interceptors.redirect({ maxRedirections: 5 }),
+)
 
 const RETRY_OPTIONS: RetryHandler.RetryOptions = {
   maxRetries: 3,
   minTimeout: 1_000,
   maxTimeout: 10_000,
   timeoutFactor: 2,
-  errorCodes: RETRY_ERROR_CODES,
+  // Omit errorCodes and statusCodes to use undici's sensible defaults:
+  //   errorCodes: ECONNRESET, ECONNREFUSED, ENOTFOUND, ENETDOWN, ENETUNREACH,
+  //              EHOSTDOWN, EHOSTUNREACH, EPIPE, UND_ERR_SOCKET
+  //   statusCodes: 500, 502, 503, 504, 429
+  // The 30 s connect timeout makes UND_ERR_CONNECT_TIMEOUT rare enough that
+  // it does not need explicit retry; no allowlist to maintain.
 }
 
+/**
+ * Extended dispatcher for @xmcl/installer downloads.
+ * Adds undici's built-in retry interceptor on top of the base config.
+ */
 export const xmclDownloadDispatcher = new Agent({
   connections: 16,
   connect: { timeout: Constants.connectTimeoutMs },

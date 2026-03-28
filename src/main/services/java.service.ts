@@ -25,6 +25,7 @@ import { app } from 'electron'
 import { Constants, fmt } from '../constants'
 import { logger } from '../logger'
 import type { ModpackManifest, InstallProgressEvent } from '../../shared/types'
+import { fetchWithRetry, createHashingStream, detectHashAlgorithm } from '../fetch-retry'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -236,15 +237,20 @@ function getRuntimesRoot(): string {
   return path.join(app.getPath('userData'), 'runtimes')
 }
 
+/** Marker file written after a JRE runtime downloads completely. */
+const RUNTIME_COMPLETE_MARKER = '.complete'
+
 /**
  * Returns the java[w.exe] binary path for a cached runtime, or null if not
- * yet downloaded.
+ * yet downloaded or if the previous download was incomplete.
  */
 async function getCachedRuntimeBin(runtimeName: string): Promise<string | null> {
+  const runtimeDir = path.join(getRuntimesRoot(), runtimeName)
   const bin = process.platform === 'win32' ? 'javaw.exe' : 'java'
-  const binPath = path.join(getRuntimesRoot(), runtimeName, 'bin', bin)
+  const binPath = path.join(runtimeDir, 'bin', bin)
   try {
     await fs.access(binPath)
+    await fs.access(path.join(runtimeDir, RUNTIME_COMPLETE_MARKER))
     return binPath
   } catch {
     return null
@@ -340,8 +346,9 @@ export async function ensureRuntime(
 
   onProgress({ total, finished, failed, currentFile: 'JRE-Index wird geladen...' })
 
-  const indexRes = await fetch(runtimeIndexUrl, {
-    signal: AbortSignal.any([signal, AbortSignal.timeout(Constants.connectTimeoutMs)]),
+  const indexRes = await fetchWithRetry(runtimeIndexUrl, {
+    signal,
+    timeoutMs: Constants.connectTimeoutMs,
   })
   if (!indexRes.ok) {
     throw new Error(
@@ -352,6 +359,14 @@ export async function ensureRuntime(
   const runtimeIndex = (await indexRes.json()) as RuntimeIndex
 
   const runtimeDir = path.join(getRuntimesRoot(), effectiveRuntime)
+  // Clean up incomplete previous download (missing .complete marker)
+  try {
+    await fs.access(runtimeDir)
+    logger.info(`[JavaService] Removing incomplete runtime '${effectiveRuntime}' for re-download`)
+    await fs.rm(runtimeDir, { recursive: true, force: true })
+  } catch {
+    // Directory does not exist - first download
+  }
   await fs.mkdir(runtimeDir, { recursive: true })
 
   const objects = runtimeIndex.objects
@@ -360,44 +375,79 @@ export async function ensureRuntime(
 
   onProgress({ total, finished, failed, currentFile: 'JRE wird installiert...' })
 
-  for (const obj of objects) {
-    signal.throwIfAborted()
+  // Download concurrently with a small worker pool
+  const CONCURRENCY = 4
+  let queueIndex = 0
+  const failedBefore = failed
 
-    const dest = path.join(runtimeDir, obj.path)
-    await fs.mkdir(path.dirname(dest), { recursive: true })
+  const downloadWorker = async (): Promise<void> => {
+    while (queueIndex < objects.length) {
+      const obj = objects[queueIndex++]
+      signal.throwIfAborted()
 
-    try {
-      const res = await fetch(obj.url, {
-        signal: AbortSignal.any([signal, AbortSignal.timeout(Constants.socketTimeoutMs)]),
-      })
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status} ${res.statusText} for ${obj.url}`)
-      }
-      const fileHandle = await fs.open(dest, 'w')
+      const dest = path.join(runtimeDir, obj.path)
+      await fs.mkdir(path.dirname(dest), { recursive: true })
+
       try {
-        await pipeline(
-          Readable.fromWeb(res.body as import('node:stream/web').ReadableStream),
-          fileHandle.createWriteStream(),
-        )
-      } finally {
-        await fileHandle.close()
+        const res = await fetchWithRetry(obj.url, {
+          signal,
+          timeoutMs: Constants.socketTimeoutMs,
+        })
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status} ${res.statusText} for ${obj.url}`)
+        }
+        const { stream: hasher, digest } = createHashingStream(detectHashAlgorithm(obj.hash))
+        const fileHandle = await fs.open(dest, 'w')
+        try {
+          await pipeline(
+            Readable.fromWeb(res.body as import('node:stream/web').ReadableStream),
+            hasher,
+            fileHandle.createWriteStream(),
+          )
+        } finally {
+          await fileHandle.close()
+        }
+        if (obj.hash) {
+          const actualHash = digest()
+          if (actualHash !== obj.hash) {
+            await fs.unlink(dest).catch(() => {})
+            throw new Error(`Hash mismatch for ${obj.path}: expected ${obj.hash}, got ${actualHash}`)
+          }
+        }
+        finished++
+      } catch (err: unknown) {
+        if ((err as Error).name === 'AbortError') throw err
+        logger.warn(`[JavaService] Failed to download JRE file ${obj.path}:`, err)
+        failed++
       }
-      finished++
-    } catch (err: unknown) {
-      if ((err as Error).name === 'AbortError') throw err
-      logger.warn(`[JavaService] Failed to download JRE file ${obj.path}:`, err)
-      failed++
-    }
 
-    onProgress({ total, finished, failed, currentFile: obj.path })
+      onProgress({ total, finished, failed, currentFile: obj.path })
+    }
   }
+
+  const workers: Promise<void>[] = []
+  for (let i = 0; i < Math.min(CONCURRENCY, objects.length); i++) {
+    workers.push(downloadWorker())
+  }
+  await Promise.all(workers)
 
   // Make java binary executable on POSIX
   if (process.platform !== 'win32') {
     const javaBin = path.join(runtimeDir, 'bin', 'java')
     await fs.chmod(javaBin, 0o755).catch(() => {
-      // Best-effort — binary path may differ across runtime distributions
+      // Best-effort - binary path may differ across runtime distributions
     })
+  }
+
+  // Mark runtime as complete only if all files succeeded
+  if (failed === failedBefore) {
+    await fs.writeFile(path.join(runtimeDir, RUNTIME_COMPLETE_MARKER), '', 'utf8')
+    logger.info(`[JavaService] Runtime '${effectiveRuntime}' downloaded successfully`)
+  } else {
+    logger.warn(
+      `[JavaService] Runtime '${effectiveRuntime}' has ${failed - failedBefore} failed file(s) - ` +
+        'will retry on next install',
+    )
   }
 
   return { total, finished, failed }

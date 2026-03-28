@@ -17,6 +17,7 @@ import {
 import { Version } from '@xmcl/core'
 
 import { xmclDownloadDispatcher } from '../download-agent'
+import { fetchWithRetry, createHashingStream, detectHashAlgorithm } from '../fetch-retry'
 
 import { IpcChannels } from '../ipc/channels'
 import { Constants, fmt } from '../constants'
@@ -397,7 +398,6 @@ class InstallService {
         currentFile: `Forge ${forgeEntry.version} wird installiert...`,
       } satisfies InstallProgressEvent)
 
-      logger.info(`[InstallService] Installing Forge ${forgeEntry.version}...`)
       await installForge(forgeEntry, minecraftDir, { java: javaPath, dispatcher: xmclDownloadDispatcher })
 
       signal.throwIfAborted()
@@ -523,12 +523,11 @@ class InstallService {
 
     // Download concurrently with a small concurrency cap
     const CONCURRENCY = 8
-    const queue = [...tasks]
+    let queueIndex = 0
 
-    async function downloadWorker(): Promise<void> {
-      while (queue.length > 0) {
-        const task = queue.shift()
-        if (!task) break
+    const downloadWorker = async (): Promise<void> => {
+      while (queueIndex < tasks.length) {
+        const task = tasks[queueIndex++]
 
         signal.throwIfAborted()
 
@@ -561,18 +560,27 @@ class InstallService {
 
         try {
           await fs.mkdir(path.dirname(targetPath), { recursive: true })
-          const res = await fetch(url, { signal })
+          const res = await fetchWithRetry(url, { signal })
           if (!res.ok) {
             throw new Error(`HTTP ${res.status} ${res.statusText} for ${url}`)
           }
+          const { stream: hasher, digest } = createHashingStream(detectHashAlgorithm(task.hash))
           const fileHandle = await fs.open(targetPath, 'w')
           try {
             await pipeline(
               Readable.fromWeb(res.body as import('node:stream/web').ReadableStream),
+              hasher,
               fileHandle.createWriteStream(),
             )
           } finally {
             await fileHandle.close()
+          }
+          if (task.hash) {
+            const actualHash = digest()
+            if (actualHash !== task.hash) {
+              await fs.unlink(targetPath).catch(() => {})
+              throw new Error(`Hash mismatch for ${task.to}: expected ${task.hash}, got ${actualHash}`)
+            }
           }
           finished++
         } catch (err: unknown) {
