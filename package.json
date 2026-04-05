@@ -22,7 +22,7 @@
     "@xmcl/core": "^2.15.1",
     "@xmcl/installer": "^6.1.2",
     "electron-updater": "^6.8.3",
-    "undici": "^7.24.6"
+    "undici": "^8.0.2"
   },
   "devDependencies": {
     "@electron-toolkit/tsconfig": "^2.0.0",
@@ -33,7 +33,7 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.2.0",
     "electron": "^41.1.0",
-    "electron-builder": "^26.8.1",
+    "electron-builder": "^26.8.2",
     "electron-vite": "^5.0.0",
     "eslint": "^10.1.0",
     "globals": "^17.4.0",
@@ -41,7 +41,7 @@
     "react-dom": "^19.2.4",
     "react-router-dom": "^7.13.2",
     "tailwindcss": "^4.2.2",
-    "typescript": "^5.3.3",
+    "typescript": "^6.0.2",
     "typescript-eslint": "^8.57.2",
     "vite": "^7.3.1",
     "vitest": "^4.1.2",
@@ -115,7 +115,7 @@
   },
   "license": "GPL-3.0-or-later",
   "overrides": {
-    "undici": "^7.24.6"
+    "undici": "^8.0.2"
   },
   "author": {
     "name": "MyFTB",
