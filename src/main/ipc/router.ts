@@ -51,28 +51,11 @@ export function registerIpcHandlers(): void {
     shell.openPath(app.getPath('logs'))
   })
 
-  ipcMain.handle(IpcChannels.CONFIG_CHANGE_DATA_DIR, async () => {
-    const win = getMainWindow()
-    if (!win) return { success: false, error: 'Kein Fenster vorhanden.' }
-
-    const result = await dialog.showOpenDialog(win, {
-      title: 'Speicherort fuer Launcher-Daten waehlen',
-      properties: ['openDirectory', 'createDirectory'],
-    })
-    if (result.canceled || !result.filePaths[0]) {
-      return { success: false, error: 'cancelled' }
+  ipcMain.handle(IpcChannels.CONFIG_MOVE_INSTANCES, async (_e, targetDir: string) => {
+    if (typeof targetDir !== 'string') {
+      return { success: false, error: 'Ungueltiger Pfad.' }
     }
-
-    const migrationResult = await configService.migrateDataDir(result.filePaths[0])
-
-    if (migrationResult.success) {
-      setTimeout(() => {
-        app.relaunch()
-        app.quit()
-      }, 500)
-    }
-
-    return migrationResult
+    return configService.moveInstances(targetDir)
   })
 
   // ── System info ─────────────────────────────────────────────
@@ -82,6 +65,7 @@ export function registerIpcHandlers(): void {
     arch: os.arch(),
     launcherVersion: app.getVersion(),
     dataDir: app.getPath('userData'),
+    installDir: configService.getInstallDir(),
   }))
 
   ipcMain.handle(IpcChannels.SYSTEM_OPEN_URL, async (_e, { url }: { url: string }) => {

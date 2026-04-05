@@ -6,8 +6,10 @@ import { app } from 'electron'
 
 import { LauncherConfig, DEFAULT_CONFIG } from '../../shared/types'
 import { logger } from '../logger'
-import { writeDataDirPointer } from '../bootstrap'
-import { validateMigrationTarget } from '../../shared/migrate-validation'
+import {
+  validateMigrationTarget,
+  type MigrationValidation,
+} from '../../shared/migrate-validation'
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -74,6 +76,9 @@ class ConfigService {
 
   /** True when config.json was absent at load time (first launch). */
   private firstStart = false
+
+  /** Guards against concurrent moveInstances calls. */
+  private moving = false
 
   /** Absolute path of config.json inside Electron's userData directory. */
   private get configPath(): string {
@@ -191,26 +196,46 @@ class ConfigService {
     }
   }
 
-  // ── Data directory migration ─────────────────────────────────────────────
+  // ── Instance directory move ──────────────────────────────────────────────
 
   /**
-   * Migrate all launcher data from the current userData to a new directory.
+   * Move modpack instances to a new directory.
    *
    * 1. Validates the target path
    * 2. Tests write access
-   * 3. Recursively copies userData contents to target
-   * 4. If installationDir pointed to old instances path, clears it so the fallback kicks in
-   * 5. Writes the bootstrap pointer file
+   * 3. Checks for name collisions in the target
+   * 4. Two-phase move: copies everything first, then deletes originals
+   * 5. Updates `installationDir` and saves config
    *
    * Returns `{ success: true }` or `{ success: false, error: string }`.
-   * Caller is responsible for restarting the app after success.
+   * No app restart required.
    */
-  async migrateDataDir(targetDir: string): Promise<{ success: boolean; error?: string }> {
-    const currentDir = app.getPath('userData')
+  async moveInstances(targetDir: string): Promise<{ success: boolean; error?: string }> {
+    if (this.moving) {
+      logger.warn('[ConfigService] moveInstances called while already in progress')
+      return { success: false, error: 'Verschiebung laeuft bereits.' }
+    }
+    this.moving = true
+    try {
+      return await this._doMoveInstances(targetDir)
+    } finally {
+      this.moving = false
+    }
+  }
+
+  private async _doMoveInstances(
+    targetDir: string,
+  ): Promise<{ success: boolean; error?: string }> {
+    const currentDir = this.getInstallDir()
+    logger.info(`[ConfigService] Move instances requested: ${currentDir} -> ${targetDir}`)
 
     const validation = validateMigrationTarget(currentDir, targetDir)
     if (!validation.ok) {
-      const messages: Record<string, string> = {
+      logger.warn(`[ConfigService] Move validation failed: ${validation.error} (target: ${targetDir})`)
+      const messages: Record<
+        Exclude<MigrationValidation, { ok: true }>['error'],
+        string
+      > = {
         'already-current': 'Das ist bereits der aktuelle Speicherort.',
         nested: 'Der Zielordner darf nicht innerhalb des aktuellen Speicherorts liegen (oder umgekehrt).',
         empty: 'Bitte waehle einen Ordner.',
@@ -225,59 +250,67 @@ class ConfigService {
       await fs.writeFile(testFile, 'test', 'utf8')
       await fs.unlink(testFile)
     } catch {
+      logger.warn(`[ConfigService] Target directory not writable: ${targetDir}`)
       return { success: false, error: 'Der Zielordner ist nicht beschreibbar.' }
     }
 
-    // Recursive copy
+    // Read current entries
+    let entries: string[]
     try {
-      await this.recursiveCopy(currentDir, targetDir)
-    } catch (err) {
-      logger.error('[ConfigService] Migration copy failed:', err)
-      return { success: false, error: 'Fehler beim Kopieren der Daten. Eventuell unvollstaendige Daten im Zielordner.' }
-    }
-
-    // If installationDir pointed to the old instances path, clear it
-    // so getInstallDir() falls back to <newUserData>/instances
-    const oldInstancesPath = path.join(currentDir, 'instances')
-    if (
-      this.config.installationDir &&
-      path.resolve(this.config.installationDir) === path.resolve(oldInstancesPath)
-    ) {
-      this.config.installationDir = ''
-      const newConfigPath = path.join(targetDir, 'config.json')
-      await fs.writeFile(newConfigPath, JSON.stringify(this.config, null, 2), 'utf8')
-    }
-
-    // Write bootstrap pointer file
-    try {
-      writeDataDirPointer(targetDir)
-    } catch (err) {
-      logger.error('[ConfigService] Failed to write pointer file:', err)
-      return { success: false, error: 'Fehler beim Schreiben der Konfiguration.' }
-    }
-
-    logger.info(`[ConfigService] Data directory migrated: ${currentDir} -> ${targetDir}`)
-    return { success: true }
-  }
-
-  /** Recursively copy a directory tree, skipping Electron ephemeral files and symlinks. */
-  private async recursiveCopy(src: string, dest: string): Promise<void> {
-    const SKIP = new Set([
-      'SingletonLock', 'SingletonSocket', 'lockfile',
-      'Cache', 'GPUCache', 'Code Cache', 'DawnGraphiteCache',
-    ])
-    await fs.mkdir(dest, { recursive: true })
-    const entries = await fs.readdir(src, { withFileTypes: true })
-    for (const entry of entries) {
-      if (SKIP.has(entry.name) || entry.isSymbolicLink()) continue
-      const srcPath = path.join(src, entry.name)
-      const destPath = path.join(dest, entry.name)
-      if (entry.isDirectory()) {
-        await this.recursiveCopy(srcPath, destPath)
+      entries = await fs.readdir(currentDir)
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        logger.warn(`[ConfigService] Current install dir does not exist, treating as empty: ${currentDir}`)
+        entries = []
       } else {
-        await fs.copyFile(srcPath, destPath)
+        logger.error('[ConfigService] Failed to read current install dir:', err)
+        return { success: false, error: 'Fehler beim Lesen des aktuellen Speicherorts.' }
       }
     }
+
+    // Check for name collisions in target
+    for (const entry of entries) {
+      try {
+        await fs.access(path.join(targetDir, entry))
+        logger.warn(`[ConfigService] Name collision in target: "${entry}" already exists in ${targetDir}`)
+        return { success: false, error: `"${entry}" existiert bereits im Zielordner.` }
+      } catch {
+        // Does not exist - good
+      }
+    }
+
+    // Phase 1: Copy everything to target
+    // (algorithm mirrored in src/tests/move-instances.test.ts - keep in sync)
+    const copied: string[] = []
+    for (const entry of entries) {
+      const src = path.join(currentDir, entry)
+      const dest = path.join(targetDir, entry)
+      try {
+        await fs.cp(src, dest, { recursive: true })
+        copied.push(entry)
+      } catch (err) {
+        // Rollback: remove already-copied entries from target
+        for (const name of copied) {
+          await fs.rm(path.join(targetDir, name), { recursive: true, force: true }).catch(() => {})
+        }
+        logger.error(`[ConfigService] Move failed at "${entry}", rolled back ${copied.length} entries`, err)
+        return { success: false, error: `Fehler beim Verschieben von "${entry}".` }
+      }
+    }
+
+    // Phase 2: All copies succeeded - delete originals
+    for (const entry of copied) {
+      await fs.rm(path.join(currentDir, entry), { recursive: true, force: true }).catch((err) => {
+        logger.warn(`[ConfigService] Failed to remove original after move: ${entry}`, err)
+      })
+    }
+
+    // Update config and persist
+    this.config.installationDir = targetDir
+    await this.save()
+
+    logger.info(`[ConfigService] Instances moved: ${currentDir} -> ${targetDir} (${copied.length} entries)`)
+    return { success: true }
   }
 }
 

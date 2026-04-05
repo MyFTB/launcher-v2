@@ -1,6 +1,8 @@
 import { memo, useEffect, useState, useCallback, useRef, useMemo, KeyboardEvent } from 'react'
 import type { LauncherConfig, SystemInfoResult, LauncherProfile } from '@shared/types'
+import { ipc } from '../ipc/client'
 import LoginModal from '../components/LoginModal'
+import MigrationModal from '../components/MigrationModal'
 import MicrosoftIcon from '../components/icons/MicrosoftIcon'
 import { MINECRAFT_MIN_MB, RAM_STEP_MB, computeMaxMemoryMb, buildLandmarks, memLabel, clampMemory, ThumbLabel } from '../utils/memory-slider'
 
@@ -113,8 +115,7 @@ export default function Settings() {
   const formRef = useRef(form)
   useEffect(() => { formRef.current = form }, [form])
 
-  const [dataDirChanging, setDataDirChanging] = useState(false)
-  const [dataDirError, setDataDirError] = useState<string | null>(null)
+  const [showMigration, setShowMigration] = useState(false)
 
   useEffect(() => {
     return () => {
@@ -170,18 +171,16 @@ export default function Settings() {
     [form, original]
   )
 
-  const handleChangeDataDir = useCallback(async () => {
-    setDataDirChanging(true)
-    setDataDirError(null)
-    try {
-      const result = await window.electronAPI.configChangeDataDir()
-      if (!result.success && result.error !== 'cancelled') {
-        setDataDirError(result.error ?? 'Unbekannter Fehler')
-      }
-    } catch (err) {
-      setDataDirError(err instanceof Error ? err.message : 'Fehler beim Verschieben')
-    } finally {
-      setDataDirChanging(false)
+  const handleMoveInstances = useCallback(() => {
+    setShowMigration(true)
+  }, [])
+
+  const handleMigrationDismiss = useCallback(async (moved: boolean) => {
+    setShowMigration(false)
+    if (moved) {
+      // Refresh the displayed installDir after a successful move
+      const sysInfo = await ipc.system.info().catch(() => null)
+      if (sysInfo) setSystemInfo(sysInfo)
     }
   }, [])
 
@@ -316,29 +315,26 @@ export default function Settings() {
           </p>
         </div>
 
-        {/* Data Directory */}
+        {/* Modpack Directory */}
         <div>
           <label className="block text-xs font-medium text-text-secondary mb-1.5">
-            Speicherort
+            Modpack-Speicherort
           </label>
           <p className="text-xs text-text-muted mb-2">
-            Hier werden Modpacks, Konfiguration, Logs, Java-Runtimes und der Cache gespeichert.
+            Hier werden installierte Modpacks gespeichert.
           </p>
           <div className="flex gap-2 items-center">
             <span className="input flex-1 text-text-secondary truncate cursor-default select-all">
-              {systemInfo?.dataDir ?? '...'}
+              {systemInfo?.installDir ?? '...'}
             </span>
             <button
               className="btn-secondary shrink-0"
-              onClick={handleChangeDataDir}
-              disabled={dataDirChanging}
+              onClick={handleMoveInstances}
+              disabled={showMigration}
             >
               Ändern...
             </button>
           </div>
-          {dataDirError && (
-            <p className="text-xs text-red-400 mt-1">{dataDirError}</p>
-          )}
         </div>
 
         {/* Allow Webstart */}
@@ -572,6 +568,7 @@ export default function Settings() {
       </div>
 
       {showLogin && <LoginModal onClose={() => setShowLogin(false)} />}
+      {showMigration && <MigrationModal onDismiss={handleMigrationDismiss} />}
     </div>
 
     {/* Discord-style floating save pill */}

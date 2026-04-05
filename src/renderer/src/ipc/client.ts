@@ -162,9 +162,9 @@ export const ipc = {
       return window.electronAPI.configOpenLogs()
     },
 
-    /** Pick a new data directory, migrate, and restart. */
-    changeDataDir(): Promise<{ success: boolean; error?: string }> {
-      return window.electronAPI.configChangeDataDir()
+    /** Move modpack instances to a new directory. */
+    moveInstances(targetDir: string): Promise<{ success: boolean; error?: string }> {
+      return window.electronAPI.configMoveInstances(targetDir)
     },
   },
 

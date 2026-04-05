@@ -203,6 +203,8 @@ export interface SystemInfoResult {
   launcherVersion: string
   /** Current userData directory path */
   dataDir: string
+  /** Resolved modpack instances directory path */
+  installDir: string
 }
 
 // Paste / crash
@@ -270,7 +272,7 @@ export interface ElectronAPI {
   configSave(config: Partial<LauncherConfig>): Promise<void>
   configPickDir(): Promise<string | null>
   configOpenLogs(): Promise<void>
-  configChangeDataDir(): Promise<{ success: boolean; error?: string }>
+  configMoveInstances(targetDir: string): Promise<{ success: boolean; error?: string }>
 
   // System
   systemInfo(): Promise<SystemInfoResult>
