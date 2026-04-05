@@ -9,7 +9,7 @@ import fs from 'node:fs/promises'
 import { createInterface } from 'node:readline'
 import { ChildProcess } from 'node:child_process'
 import { ipcMain, shell, app, BrowserWindow } from 'electron'
-import { launch as xmclLaunch } from '@xmcl/core'
+import { launch as xmclLaunch, generateArguments } from '@xmcl/core'
 
 import { IpcChannels } from '../ipc/channels'
 import { Constants, fmt } from '../constants'
@@ -41,6 +41,58 @@ function getDiscordService(): {
   } catch {
     return null
   }
+}
+
+// ─── Child-process environment sanitization ─────────────────────────────────
+
+/**
+ * Electron on Linux may inject its own directory into LD_LIBRARY_PATH,
+ * which contains Chromium's bundled libGLESv2.so, libEGL.so, libvulkan.so,
+ * etc. When the child Java process inherits this, LWJGL can load the wrong
+ * native libraries, causing "stack smashing detected" (SIGABRT) or similar
+ * native crashes.
+ *
+ * This function returns a cleaned copy of process.env suitable for spawning
+ * Minecraft. On Linux it strips Electron-injected paths from LD_LIBRARY_PATH
+ * and removes LD_PRELOAD entirely (Electron may set it for sandbox/crash
+ * reporting). On other platforms the env is returned unchanged.
+ *
+ * Exported for testing - see src/tests/launch-env.test.ts
+ */
+export function buildChildEnv(
+  env: Record<string, string | undefined> = process.env,
+): Record<string, string | undefined> {
+  if (process.platform !== 'linux') return { ...env }
+
+  const cleaned = { ...env }
+
+  // LD_PRELOAD can point to Electron's crash-handler .so - remove entirely.
+  delete cleaned.LD_PRELOAD
+
+  // Filter LD_LIBRARY_PATH entries that look like they belong to Electron.
+  // Electron dirs typically contain electron, chrome, or the app's binary.
+  const ldPath = env.LD_LIBRARY_PATH
+  if (ldPath) {
+    const filtered = ldPath
+      .split(':')
+      .filter((p) => {
+        const lower = p.toLowerCase()
+        return (
+          !lower.includes('electron') &&
+          !lower.includes('/app.asar') &&
+          !lower.includes('/chrome') &&
+          !lower.includes('/chromium')
+        )
+      })
+      .join(':')
+    if (filtered) {
+      cleaned.LD_LIBRARY_PATH = filtered
+    } else {
+      delete cleaned.LD_LIBRARY_PATH
+    }
+  }
+
+  return cleaned
 }
 
 // ─── Log4j XML parser ────────────────────────────────────────────────────────
@@ -308,6 +360,9 @@ class LaunchService {
         // Java binary path — resolved via java.service (bundled runtime, system scan, fallback)
         const javaPath = await resolveJavaPath(manifest)
 
+        // Sanitize env for child process (strips Electron-injected LD_LIBRARY_PATH on Linux)
+        const childEnv = buildChildEnv()
+
         const launchOptions = {
           gamePath: instanceDir,
           resourcePath: minecraftDir,           // must be a plain string
@@ -324,7 +379,7 @@ class LaunchService {
           launcherBrand: 'MyFTBLauncher',
           // detached: true moves the child to its own process group so it is
           // not killed when the launcher window closes (Windows Job Object).
-          extraExecOption: { detached: true },
+          extraExecOption: { detached: true, env: childEnv },
         }
 
         // ── 6. Emit launching state ───────────────────────────────────────────
@@ -333,6 +388,14 @@ class LaunchService {
           ` | Java: ${javaPath} | mem: ${effectiveMinMemory}-${effectiveMaxMemory} MB`,
         )
         sendState({ state: 'launching' })
+
+        // Log full command line for debugging native crashes
+        try {
+          const args = await generateArguments(launchOptions)
+          logger.debug(`[LaunchService] Full command: ${args.join(' ')}`)
+        } catch {
+          // Non-fatal - don't block launch if arg generation fails
+        }
 
         // ── 7. Start Minecraft ────────────────────────────────────────────────
         let child: ChildProcess

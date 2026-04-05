@@ -43,7 +43,8 @@ async function moveEntries(
       await fs.cp(src, dest, { recursive: true })
       copied.push(entry)
     } catch {
-      // Rollback
+      // Rollback: remove partially-copied current entry + already-copied entries
+      await fs.rm(dest, { recursive: true, force: true }).catch(() => {})
       for (const name of copied) {
         await fs.rm(path.join(targetDir, name), { recursive: true, force: true }).catch(() => {})
       }
