@@ -3,6 +3,12 @@
 All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [2.1.0] — 2026-04-06
+
+### 📚 Documentation
+
+- Update CHANGELOG.md for v2.1.0-experimental.2 [skip ci]
+- Update CHANGELOG.md for v2.1.0-experimental.3 [skip ci]
 ## [2.1.0-experimental.3] — 2026-04-05
 
 ### 🐛 Bug Fixes
