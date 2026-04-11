@@ -262,7 +262,7 @@ export interface ElectronAPI {
   launchKill(): Promise<void>
   launchGetLog(): Promise<string>
   launchOpenFolder(packName: string): Promise<void>
-  launchDeletePack(packName: string): Promise<boolean>
+  launchDeletePack(packName: string): Promise<{ success: boolean; error?: string }>
   launchCreateShortcut(packName: string): Promise<void>
   launchUploadCrash(packName: string): Promise<string>
   launchUploadLog(): Promise<string>

@@ -5,8 +5,10 @@ import ContextMenu from '../components/ContextMenu'
 import PackSettingsModal from '../components/PackSettingsModal'
 import ProgressModal from '../components/ProgressModal'
 import FeatureModal from '../components/FeatureModal'
+import DeleteConfirmModal from '../components/DeleteConfirmModal'
 import { useNavigate } from 'react-router-dom'
 import { useLaunchStore } from '../store/launch.store'
+import { useModpackStore } from '../store/modpack.store'
 
 interface ContextMenuState {
   x: number
@@ -25,6 +27,7 @@ export default function InstalledPacks() {
   const [packSettingsTarget, setPackSettingsTarget] = useState<string | null>(null)
   const [uploadMessage, setUploadMessage] = useState<string | null>(null)
   const uploadTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<{ name: string; title: string } | null>(null)
 
   // Launch state lives in the store so it survives tab switches.
   const launchState = useLaunchStore((s) => s.launchState)
@@ -161,12 +164,18 @@ export default function InstalledPacks() {
     setContextMenu({ x: e.clientX, y: e.clientY, packName })
   }, [])
 
-  const handleDelete = useCallback(async (packName: string) => {
-    const ok = await window.electronAPI.launchDeletePack(packName)
-    if (ok) {
-      setPacks((prev) => prev.filter((p) => p.name !== packName))
+  const handleDelete = useCallback((packName: string) => {
+    const pack = packs.find((p) => p.name === packName)
+    setDeleteTarget({ name: packName, title: pack?.title ?? packName })
+  }, [packs])
+
+  const handleDeleteDismiss = useCallback(async (deleted: boolean) => {
+    if (deleted && deleteTarget) {
+      setPacks((prev) => prev.filter((p) => p.name !== deleteTarget.name))
+      await useModpackStore.getState().fetchInstalled()
     }
-  }, [])
+    setDeleteTarget(null)
+  }, [deleteTarget])
 
   const handleUploadCrash = useCallback(async (packName: string) => {
     try {
@@ -215,10 +224,12 @@ export default function InstalledPacks() {
       {
         label: 'Löschen',
         danger: true,
+        disabled: runningPack === packName,
+        title: runningPack === packName ? 'Modpack läuft gerade' : undefined,
         action: () => handleDelete(packName),
       },
     ]
-  }, [contextMenu?.packName, packs, updateMap, handleUpdate, handleUploadCrash, handleDelete])
+  }, [contextMenu?.packName, packs, updateMap, runningPack, handleUpdate, handleUploadCrash, handleDelete])
 
   const isGameRunning = launchState === 'running' || launchState === 'launching'
   const updateCount = Object.values(updateMap).filter(Boolean).length
@@ -362,6 +373,15 @@ export default function InstalledPacks() {
           features={pendingFeatures}
           onConfirm={handleFeatureConfirm}
           onCancel={handleFeatureCancel}
+        />
+      )}
+
+      {/* Delete confirmation modal */}
+      {deleteTarget && (
+        <DeleteConfirmModal
+          packName={deleteTarget.name}
+          packTitle={deleteTarget.title}
+          onDismiss={handleDeleteDismiss}
         />
       )}
     </div>

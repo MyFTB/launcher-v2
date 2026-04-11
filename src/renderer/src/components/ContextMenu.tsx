@@ -4,6 +4,8 @@ interface ContextMenuItem {
   label: string
   action: () => void
   danger?: boolean
+  disabled?: boolean
+  title?: string
 }
 
 interface ContextMenuProps {
@@ -50,10 +52,17 @@ export default function ContextMenu({ x, y, items, onClose }: ContextMenuProps) 
       {items.map((item, index) => (
         <button
           key={index}
-          className={`w-full text-left px-4 py-2 text-sm transition-[background-color,color,transform] duration-150 hover:bg-bg-overlay active:scale-[0.98] ${
-            item.danger ? 'text-red-400 hover:text-red-300' : 'text-text-primary'
+          className={`w-full text-left px-4 py-2 text-sm transition-[background-color,color,transform] duration-150 ${
+            item.disabled
+              ? 'opacity-50 cursor-not-allowed'
+              : 'hover:bg-bg-overlay active:scale-[0.98]'
+          } ${
+            item.danger ? 'text-red-400' + (item.disabled ? '' : ' hover:text-red-300') : 'text-text-primary'
           }`}
+          title={item.title}
+          aria-disabled={item.disabled || undefined}
           onClick={() => {
+            if (item.disabled) return
             item.action()
             onClose()
           }}

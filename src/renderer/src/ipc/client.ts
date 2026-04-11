@@ -118,8 +118,8 @@ export const ipc = {
       return window.electronAPI.launchOpenFolder(packName)
     },
 
-    /** Delete an installed modpack; resolves true when the directory is gone. */
-    deletePack(packName: string): Promise<boolean> {
+    /** Delete an installed modpack and its config entries. */
+    deletePack(packName: string): Promise<{ success: boolean; error?: string }> {
       return window.electronAPI.launchDeletePack(packName)
     },
 

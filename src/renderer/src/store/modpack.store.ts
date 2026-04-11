@@ -66,7 +66,6 @@ interface ModpackState {
   fetchRecent(lastPlayedPacks: string[]): void
   installPack(reference: ModpackManifestReference, selectedFeatures?: string[]): Promise<void>
   cancelInstall(): Promise<void>
-  deletePack(packName: string): Promise<void>
   initListeners(): void
 }
 
@@ -129,12 +128,6 @@ export const useModpackStore = create<ModpackState>()((set, get) => ({
   async cancelInstall() {
     await ipc.install.cancel()
     set({ installPending: false, installProgress: null })
-  },
-
-  async deletePack(packName: string) {
-    await ipc.launch.deletePack(packName)
-    // Refresh installed list after deletion.
-    await get().fetchInstalled()
   },
 
   initListeners() {

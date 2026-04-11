@@ -27,6 +27,7 @@ import type {
   LaunchLogEvent,
   ModpackManifestReference,
   LauncherProfile,
+  LauncherConfig,
 } from '../../shared/types'
 
 // ─── Discord service (optional — may not be present in all builds) ───────────
@@ -525,29 +526,38 @@ class LaunchService {
   private handleLaunchDeletePack(): void {
     ipcMain.handle(
       IpcChannels.LAUNCH_DELETE_PACK,
-      async (_event, payload: LaunchDeletePayload): Promise<boolean> => {
+      async (_event, payload: LaunchDeletePayload): Promise<{ success: boolean; error?: string }> => {
         if (this.isRunning && this.currentPackName === payload.packName) {
-          throw new Error(`Cannot delete "${payload.packName}" while it is running`)
+          return { success: false, error: 'Das Modpack kann nicht geloescht werden, waehrend es laeuft.' }
         }
 
-        const instanceDir = await this.resolveInstanceDir(payload.packName)
-
         try {
+          const instanceDir = await this.resolveInstanceDir(payload.packName)
           await fs.rm(instanceDir, { recursive: true, force: true })
 
-          // Remove any per-pack config override stored for this pack
+          // Remove per-pack config and lastPlayedPacks entry
           const cfg = configService.get()
+          const updates: Partial<LauncherConfig> = {}
+
           if (cfg.packConfigs?.[payload.packName]) {
             const { [payload.packName]: _removed, ...rest } = cfg.packConfigs
-            configService.merge({ packConfigs: rest })
+            updates.packConfigs = rest
+          }
+
+          if (cfg.lastPlayedPacks?.includes(payload.packName)) {
+            updates.lastPlayedPacks = cfg.lastPlayedPacks.filter((n) => n !== payload.packName)
+          }
+
+          if (Object.keys(updates).length > 0) {
+            configService.merge(updates)
             await configService.save()
           }
 
           logger.info(`[LaunchService] Pack deleted: "${payload.packName}"`)
-          return true
+          return { success: true }
         } catch (err) {
           logger.error(`[LaunchService] Failed to delete pack "${payload.packName}":`, err)
-          return false
+          return { success: false, error: 'Das Modpack konnte nicht geloescht werden.' }
         }
       },
     )
@@ -722,7 +732,12 @@ class LaunchService {
    */
   private async resolveInstanceDir(packName: string): Promise<string> {
     const instancesDir = await configService.getSaveSubDir('instances')
-    return path.join(instancesDir, packName)
+    const resolved = path.resolve(instancesDir, packName)
+    const normalizedBase = path.resolve(instancesDir)
+    if (!resolved.startsWith(normalizedBase + path.sep)) {
+      throw new Error(`Invalid pack name - path traversal detected: "${packName}"`)
+    }
+    return resolved
   }
 }
 

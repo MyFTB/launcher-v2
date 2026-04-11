@@ -10,3 +10,6 @@ release/
 
 # Type-check cache
 *.tsbuildinfo
+
+# Brainstorm session files
+.superpowers/
