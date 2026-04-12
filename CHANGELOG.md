@@ -3,6 +3,18 @@
 All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [2.2.0] — 2026-04-12
+
+### 📚 Documentation
+
+- Update CHANGELOG.md for v2.1.0 [skip ci]
+
+### 🚀 Features
+
+- Add delete modpack confirmation modal
+- Add sanitizeLogLine function to prevent log injection and enhance logging security
+- Post-install optional mods reconfiguration via context menu
+- Update sanitizeLogLine to escape newlines for improved logging security
 ## [2.1.0] — 2026-04-06
 
 ### 📚 Documentation
