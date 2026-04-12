@@ -22,29 +22,29 @@
     "@xmcl/core": "^2.15.1",
     "@xmcl/installer": "^6.1.2",
     "electron-updater": "^6.8.3",
-    "undici": "^8.0.2"
+    "undici": "^8.0.3"
   },
   "devDependencies": {
     "@electron-toolkit/tsconfig": "^2.0.0",
     "@electron-toolkit/utils": "^4.0.0",
     "@tailwindcss/vite": "^4.2.2",
-    "@types/node": "^25.5.0",
+    "@types/node": "^25.6.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.2.0",
-    "electron": "^41.1.0",
+    "electron": "^41.2.0",
     "electron-builder": "^26.8.2",
     "electron-vite": "^5.0.0",
-    "eslint": "^10.1.0",
-    "globals": "^17.4.0",
-    "react": "^19.2.4",
-    "react-dom": "^19.2.4",
+    "eslint": "^10.2.0",
+    "globals": "^17.5.0",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
     "react-router-dom": "^7.13.2",
     "tailwindcss": "^4.2.2",
     "typescript": "^6.0.2",
-    "typescript-eslint": "^8.57.2",
-    "vite": "^7.3.1",
-    "vitest": "^4.1.2",
+    "typescript-eslint": "^8.58.1",
+    "vite": "^7.3.2",
+    "vitest": "^4.1.4",
     "zustand": "^5.0.12"
   },
   "build": {
@@ -115,7 +115,7 @@
   },
   "license": "GPL-3.0-or-later",
   "overrides": {
-    "undici": "^8.0.2"
+    "undici": "^8.0.3"
   },
   "author": {
     "name": "MyFTB",
