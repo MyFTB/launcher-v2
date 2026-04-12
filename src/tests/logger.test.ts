@@ -6,30 +6,30 @@ describe('sanitizeLogLine', () => {
     expect(sanitizeLogLine('hello world')).toBe('hello world')
   })
 
-  it('indents LF newlines to prevent log injection', () => {
-    expect(sanitizeLogLine('line1\nline2')).toBe('line1\n    line2')
+  it('escapes LF newlines to literal \\n', () => {
+    expect(sanitizeLogLine('line1\nline2')).toBe('line1\\nline2')
   })
 
-  it('indents CRLF newlines', () => {
-    expect(sanitizeLogLine('line1\r\nline2')).toBe('line1\n    line2')
+  it('escapes CRLF newlines to literal \\r\\n', () => {
+    expect(sanitizeLogLine('line1\r\nline2')).toBe('line1\\r\\nline2')
   })
 
-  it('indents bare CR newlines', () => {
-    expect(sanitizeLogLine('line1\rline2')).toBe('line1\n    line2')
+  it('escapes bare CR to literal \\r', () => {
+    expect(sanitizeLogLine('line1\rline2')).toBe('line1\\rline2')
   })
 
-  it('handles multiple newlines (e.g. stack traces)', () => {
+  it('escapes multiple newlines (e.g. stack traces)', () => {
     const input = 'Error: boom\n  at foo (bar.js:1)\n  at baz (qux.js:2)'
-    const expected = 'Error: boom\n      at foo (bar.js:1)\n      at baz (qux.js:2)'
+    const expected = 'Error: boom\\n  at foo (bar.js:1)\\n  at baz (qux.js:2)'
     expect(sanitizeLogLine(input)).toBe(expected)
   })
 
-  it('prevents forged log entries', () => {
+  it('prevents forged log entries by removing real newlines', () => {
     const malicious = 'safe text\n[2026-01-01T00:00:00Z] [INFO ] forged entry'
     const result = sanitizeLogLine(malicious)
-    // The forged prefix should be indented, not at column 0
-    expect(result).toBe('safe text\n    [2026-01-01T00:00:00Z] [INFO ] forged entry')
-    expect(result.split('\n')[1]).toMatch(/^\s/)
+    // No actual newline characters remain
+    expect(result).not.toContain('\n')
+    expect(result).toBe('safe text\\n[2026-01-01T00:00:00Z] [INFO ] forged entry')
   })
 })
 

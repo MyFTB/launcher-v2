@@ -39,12 +39,13 @@ type LogLevel = 'DEBUG' | 'INFO ' | 'WARN ' | 'ERROR'
 
 /**
  * Sanitise a formatted log message so that embedded newlines cannot forge
- * new log entries (log injection).  Continuation lines are indented with
- * 4 spaces so they are visually distinct from real log entry prefixes.
+ * new log entries (log injection).  Newline characters are escaped to their
+ * literal representations (`\n`, `\r`) so each log call produces exactly
+ * one line in the log file.
  * Exported for unit testing.
  */
 export function sanitizeLogLine(message: string): string {
-  return message.replace(/\r\n|\r|\n/g, '\n    ')
+  return message.replace(/\r\n/g, '\\r\\n').replace(/\n/g, '\\n').replace(/\r/g, '\\r')
 }
 
 /**
