@@ -307,12 +307,15 @@ class LaunchService {
           )
           const success = await installService.installModpack(remoteRef)
           if (!success) {
-            throw new Error(`Auto-update of "${packName}" failed`)
-          }
-          // Re-load manifest after update so we have the latest version.
-          const updated = await installService.getManifestByName(packName)
-          if (updated) {
-            manifest = updated
+            // Auto-update may fail due to a busy install or a real error.
+            // Continue launching with the currently installed version instead of throwing.
+            logger.warn(`[LaunchService] Auto-update of "${packName}" skipped or failed - launching with installed version`)
+          } else {
+            // Re-load manifest after update so we have the latest version.
+            const updated = await installService.getManifestByName(packName)
+            if (updated) {
+              manifest = updated
+            }
           }
         }
 

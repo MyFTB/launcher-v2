@@ -28,11 +28,16 @@ import { logger } from '../logger'
 import type {
   ModpackManifest,
   ModpackManifestReference,
+  Feature,
   FeatureCondition,
+  FileTask,
   InstallProgressEvent,
   InstallCompleteEvent,
   InstallNeedsFeaturesEvent,
   InstallModpackPayload,
+  ChangeFeaturesPayload,
+  ChangeFeaturesResult,
+  PackFeaturesResult,
 } from '../../shared/types'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -54,8 +59,9 @@ export function isPathWithinDir(baseDir: string, filePath: string): boolean {
 /**
  * Evaluate a FileTask `when` condition against the currently selected features.
  * Returns `true` when the file should be downloaded.
+ * Exported for unit testing.
  */
-function evaluateCondition(
+export function evaluateCondition(
   condition: FeatureCondition | undefined,
   selectedFeatures: string[],
 ): boolean {
@@ -70,6 +76,82 @@ function evaluateCondition(
   }
 
   return true
+}
+
+/**
+ * Infer which features are currently selected by checking which feature-gated
+ * files exist on disk. Optimistic: assumes a feature is selected if evidence
+ * for it exists. Exported for unit testing.
+ */
+export function inferSelectedFeatures(
+  features: Feature[],
+  tasks: FileTask[],
+  existingFiles: Set<string>,
+): string[] {
+  const selected: string[] = []
+  for (const feature of features) {
+    const gatedTasks = tasks.filter(
+      (t) => t.when && t.when.features.includes(feature.name),
+    )
+    if (gatedTasks.length === 0) {
+      // Feature has no gated tasks — assume default
+      if (feature.default) selected.push(feature.name)
+      continue
+    }
+    // Optimistic: if any gated file exists, assume the feature was selected
+    const anyExists = gatedTasks.some((t) => existingFiles.has(t.to))
+    if (anyExists) {
+      selected.push(feature.name)
+    }
+  }
+  return selected
+}
+
+const SELECTED_FEATURES_FILE = 'selected-features.json'
+
+/**
+ * Read the persisted feature selection for an installed pack.
+ * Falls back to disk inference for legacy installs without the file.
+ */
+async function readSelectedFeatures(
+  instanceDir: string,
+  manifest: ModpackManifest,
+): Promise<string[]> {
+  const filePath = path.join(instanceDir, SELECTED_FEATURES_FILE)
+  try {
+    const raw = await fs.readFile(filePath, 'utf8')
+    return JSON.parse(raw) as string[]
+  } catch {
+    // No saved selection — infer from files on disk
+  }
+
+  if (!manifest.features || manifest.features.length === 0) return []
+
+  const tasks = manifest.tasks ?? []
+  const existingFiles = new Set<string>()
+  for (const task of tasks) {
+    if (!task.when) continue
+    const targetPath = path.join(instanceDir, task.to)
+    try {
+      await fs.access(targetPath)
+      existingFiles.add(task.to)
+    } catch {
+      // File does not exist
+    }
+  }
+
+  return inferSelectedFeatures(manifest.features, tasks, existingFiles)
+}
+
+/**
+ * Persist the user's feature selection to the instance directory.
+ */
+async function writeSelectedFeatures(
+  instanceDir: string,
+  selectedFeatures: string[],
+): Promise<void> {
+  const filePath = path.join(instanceDir, SELECTED_FEATURES_FILE)
+  await fs.writeFile(filePath, JSON.stringify(selectedFeatures, null, 2), 'utf8')
 }
 
 /**
@@ -240,13 +322,30 @@ class InstallService {
 
     ipcMain.handle(IpcChannels.INSTALL_GET_INSTALLED, async () => {
       const packs = await this.getInstalledPacks()
-      return packs.map((p) => ({ name: p.name, version: p.version }))
+      return packs.map((p) => ({
+        name: p.name,
+        version: p.version,
+        hasFeatures: Array.isArray(p.features) && p.features.length > 0,
+      }))
+    })
+
+    ipcMain.handle(IpcChannels.INSTALL_GET_PACK_FEATURES, async (_event, payload: { packName: string }) => {
+      return this.handleGetPackFeatures(payload.packName)
+    })
+
+    ipcMain.handle(IpcChannels.INSTALL_CHANGE_FEATURES, (_event, payload: ChangeFeaturesPayload) => {
+      return this.handleChangeFeatures(payload)
     })
   }
 
   // ── IPC handlers ──────────────────────────────────────────────────────────
 
   private async handleInstallModpack(payload: InstallModpackPayload): Promise<void> {
+    // Busy guard — reject at handler level so the IPC rejection reaches the renderer
+    if (this.currentAbort) {
+      throw new Error('Eine Installation laeuft bereits')
+    }
+
     const { reference, selectedFeatures } = payload
 
     // 1. Fetch full manifest
@@ -284,10 +383,38 @@ class InstallService {
     }
   }
 
+  private async handleGetPackFeatures(packName: string): Promise<PackFeaturesResult> {
+    const manifest = await this.getManifestByName(packName)
+    if (!manifest) {
+      throw new Error(`Manifest fuer "${packName}" nicht gefunden`)
+    }
+    if (!manifest.features || manifest.features.length === 0) {
+      throw new Error(`Pack "${packName}" hat keine optionalen Features`)
+    }
+    const instancesDir = await configService.getSaveSubDir('instances')
+    const instanceDir = path.join(instancesDir, packName)
+    const selected = await readSelectedFeatures(instanceDir, manifest)
+    return { features: manifest.features, selected }
+  }
+
+  private async handleChangeFeatures(payload: ChangeFeaturesPayload): Promise<void> {
+    // Busy guard — reject at handler level so the IPC rejection reaches the renderer
+    if (this.currentAbort) {
+      throw new Error('Eine Installation laeuft bereits')
+    }
+
+    const { packName, selectedFeatures } = payload
+    logger.info(`[InstallService] Feature change requested for "${packName}" with features: [${selectedFeatures.join(', ')}]`)
+
+    this.runChangeFeatures(packName, selectedFeatures).catch((err: unknown) => {
+      logger.error('[InstallService] Unhandled feature change error:', err)
+    })
+  }
+
   // ── Install flow ──────────────────────────────────────────────────────────
 
   private async runInstall(manifest: ModpackManifest, selectedFeatures: string[]): Promise<void> {
-    // Abort any previous install
+    // Defensive: callers must check the busy guard, but abort a stale controller if one slipped through
     if (this.currentAbort) {
       this.currentAbort.abort()
     }
@@ -634,12 +761,189 @@ class InstallService {
     // CodeQL[js/http-to-file-access]: pack manifest from trusted packs.myftb.de, intentionally persisted to track installed state
     await fs.writeFile(manifestFilePath, JSON.stringify(manifest, null, 2), 'utf8')
 
+    // Persist user's feature selection for post-install reconfiguration
+    await writeSelectedFeatures(instanceDir, selectedFeatures)
+
     signal.throwIfAborted()
 
     // ── Complete ──────────────────────────────────────────────────────────────
     const success = failed === 0
     const complete: InstallCompleteEvent = { success, error: success ? undefined : `${failed} Datei(en) konnten nicht heruntergeladen werden` }
     pushEvent(IpcChannels.INSTALL_COMPLETE, complete)
+  }
+
+  // ── Feature change flow ──────────────────────────────────────────────────
+
+  private async runChangeFeatures(packName: string, newSelection: string[]): Promise<void> {
+    const abort = new AbortController()
+    setMaxListeners(0, abort.signal)
+    this.currentAbort = abort
+    const { signal } = abort
+
+    try {
+      // 1. Read manifest
+      const manifest = await this.getManifestByName(packName)
+      if (!manifest) {
+        const result: ChangeFeaturesResult = { success: false, error: `Manifest fuer "${packName}" nicht gefunden` }
+        pushEvent(IpcChannels.INSTALL_FEATURES_CHANGE_COMPLETE, result)
+        return
+      }
+
+      const instancesDir = await configService.getSaveSubDir('instances')
+      const instanceDir = path.join(instancesDir, packName)
+
+      // 2. Read old selection
+      const oldSelection = await readSelectedFeatures(instanceDir, manifest)
+
+      // 3. Compute diff
+      const tasks = manifest.tasks ?? []
+      const toDownload: FileTask[] = []
+      const toDelete: FileTask[] = []
+
+      for (const task of tasks) {
+        if (!task.when) continue
+        const nowIncluded = evaluateCondition(task.when, newSelection)
+        const wasIncluded = evaluateCondition(task.when, oldSelection)
+        if (nowIncluded && !wasIncluded) toDownload.push(task)
+        if (!nowIncluded && wasIncluded) toDelete.push(task)
+      }
+
+      logger.info(`[InstallService] Feature change diff for "${packName}": ${toDownload.length} to download, ${toDelete.length} to delete`)
+
+      if (toDownload.length === 0 && toDelete.length === 0) {
+        // No file changes needed — just persist the new selection
+        await writeSelectedFeatures(instanceDir, newSelection)
+        const result: ChangeFeaturesResult = { success: true }
+        pushEvent(IpcChannels.INSTALL_FEATURES_CHANGE_COMPLETE, result)
+        return
+      }
+
+      // 4. Download new files
+      const total = toDownload.length + toDelete.length
+      let finished = 0
+      let failed = 0
+
+      pushEvent(IpcChannels.INSTALL_FEATURES_CHANGE_PROGRESS, {
+        total,
+        finished,
+        failed,
+        currentFile: undefined,
+      } satisfies InstallProgressEvent)
+
+      const CONCURRENCY = 8
+      let queueIndex = 0
+
+      const downloadWorker = async (): Promise<void> => {
+        while (queueIndex < toDownload.length) {
+          const task = toDownload[queueIndex++]
+
+          signal.throwIfAborted()
+
+          const url = task.location.startsWith('http')
+            ? task.location
+            : fmt(Constants.launcherObjects, task.location)
+
+          const targetPath = path.resolve(instanceDir, task.to)
+
+          if (!isPathWithinDir(instanceDir, task.to)) {
+            throw new Error(`Pack manifest contains unsafe file path: ${task.to}`)
+          }
+
+          try {
+            await fs.mkdir(path.dirname(targetPath), { recursive: true })
+            const res = await fetchWithRetry(url, { signal })
+            if (!res.ok) {
+              throw new Error(`HTTP ${res.status} ${res.statusText} for ${url}`)
+            }
+            const { stream: hasher, digest } = createHashingStream(detectHashAlgorithm(task.hash))
+            const fileHandle = await fs.open(targetPath, 'w')
+            try {
+              await pipeline(
+                Readable.fromWeb(res.body as import('node:stream/web').ReadableStream),
+                hasher,
+                fileHandle.createWriteStream(),
+              )
+            } finally {
+              await fileHandle.close()
+            }
+            if (task.hash) {
+              const actualHash = digest()
+              if (actualHash !== task.hash) {
+                await fs.unlink(targetPath).catch(() => {})
+                throw new Error(`Hash mismatch for ${task.to}: expected ${task.hash}, got ${actualHash}`)
+              }
+            }
+            finished++
+          } catch (err: unknown) {
+            if ((err as Error).name === 'AbortError') throw err
+            logger.warn(`[InstallService] Feature change: failed to download ${url}:`, err)
+            failed++
+          }
+
+          pushEvent(IpcChannels.INSTALL_FEATURES_CHANGE_PROGRESS, {
+            total,
+            finished,
+            failed,
+            currentFile: task.to,
+          } satisfies InstallProgressEvent)
+        }
+      }
+
+      const workers: Promise<void>[] = []
+      for (let i = 0; i < Math.min(CONCURRENCY, toDownload.length); i++) {
+        workers.push(downloadWorker())
+      }
+      await Promise.all(workers)
+
+      signal.throwIfAborted()
+
+      // 5. Partial-failure check: if any downloads failed, preserve old state
+      if (failed > 0) {
+        logger.warn(`[InstallService] Feature change for "${packName}" had ${failed} failed download(s) - preserving old selection`)
+        await writeSelectedFeatures(instanceDir, oldSelection)
+        const result: ChangeFeaturesResult = { success: false, error: `${failed} Datei(en) konnten nicht heruntergeladen werden` }
+        pushEvent(IpcChannels.INSTALL_FEATURES_CHANGE_COMPLETE, result)
+        return
+      }
+
+      // 6. Delete deselected files (only after all downloads succeeded)
+      for (const task of toDelete) {
+        signal.throwIfAborted()
+        const targetPath = path.resolve(instanceDir, task.to)
+        if (isPathWithinDir(instanceDir, task.to)) {
+          await fs.unlink(targetPath).catch(() => {
+            // File may already be gone
+          })
+          finished++
+          pushEvent(IpcChannels.INSTALL_FEATURES_CHANGE_PROGRESS, {
+            total,
+            finished,
+            failed,
+            currentFile: task.to,
+          } satisfies InstallProgressEvent)
+        }
+      }
+
+      // 7. Persist new selection
+      await writeSelectedFeatures(instanceDir, newSelection)
+      logger.info(`[InstallService] Feature change complete for "${packName}"`)
+      const result: ChangeFeaturesResult = { success: true }
+      pushEvent(IpcChannels.INSTALL_FEATURES_CHANGE_COMPLETE, result)
+    } catch (err: unknown) {
+      if ((err as Error).name === 'AbortError') {
+        logger.info(`[InstallService] Feature change cancelled for "${packName}"`)
+        const result: ChangeFeaturesResult = { success: false, error: 'Vorgang abgebrochen' }
+        pushEvent(IpcChannels.INSTALL_FEATURES_CHANGE_COMPLETE, result)
+      } else {
+        logger.error(`[InstallService] Feature change failed for "${packName}":`, err)
+        const result: ChangeFeaturesResult = { success: false, error: formatInstallError(err) }
+        pushEvent(IpcChannels.INSTALL_FEATURES_CHANGE_COMPLETE, result)
+      }
+    } finally {
+      if (this.currentAbort === abort) {
+        this.currentAbort = null
+      }
+    }
   }
 
   // ── Public install API ────────────────────────────────────────────────────
@@ -650,6 +954,12 @@ class InstallService {
    * Returns true on success, false on failure.
    */
   async installModpack(reference: ModpackManifestReference): Promise<boolean> {
+    // Busy guard — auto-update skips gracefully when another operation is running
+    if (this.currentAbort) {
+      logger.warn(`[InstallService] Auto-update skipped for "${reference.name}" - another install is in progress`)
+      return false
+    }
+
     const manifestUrl = fmt(Constants.packManifest, reference.location)
     logger.info(`[InstallService] Auto-update install started: ${reference.name} v${reference.version}`)
     let manifestRes: Response
@@ -665,7 +975,11 @@ class InstallService {
     }
     const manifest: ModpackManifest = await manifestRes.json() as ModpackManifest
     try {
-      await this.runInstall(manifest, [])
+      // Read the user's saved feature selection so auto-update preserves it
+      const instancesDir = await configService.getSaveSubDir('instances')
+      const instanceDir = path.join(instancesDir, manifest.name)
+      const savedFeatures = await readSelectedFeatures(instanceDir, manifest)
+      await this.runInstall(manifest, savedFeatures)
       logger.info(`[InstallService] Auto-update complete: ${reference.name} v${reference.version}`)
       return true
     } catch (err) {

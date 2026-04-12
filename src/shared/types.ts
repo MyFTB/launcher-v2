@@ -183,6 +183,11 @@ export interface InstallProgressEvent {
 export interface InstallCompleteEvent { success: boolean; error?: string }
 export interface InstallNeedsFeaturesEvent { features: Feature[] }
 
+// Feature change (post-install reconfiguration)
+export interface PackFeaturesResult { features: Feature[]; selected: string[] }
+export interface ChangeFeaturesPayload { packName: string; selectedFeatures: string[] }
+export interface ChangeFeaturesResult { success: boolean; error?: string }
+
 // Launch
 export interface LaunchStartPayload { packName: string }
 export interface LaunchOpenFolderPayload { packName: string }
@@ -255,7 +260,9 @@ export interface ElectronAPI {
   // Install
   installModpack(reference: ModpackManifestReference, selectedFeatures?: string[]): Promise<void>
   installCancel(): Promise<void>
-  installGetInstalled(): Promise<{ name: string; version: string }[]>
+  installGetInstalled(): Promise<{ name: string; version: string; hasFeatures: boolean }[]>
+  installGetPackFeatures(packName: string): Promise<PackFeaturesResult>
+  installChangeFeatures(packName: string, selectedFeatures: string[]): Promise<void>
 
   // Launch
   launchStart(packName: string): Promise<void>

@@ -1,17 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import type { FeatureCondition } from '@shared/types'
+import { evaluateCondition } from '../main/services/install.service'
 
-// ── Pure helper: feature condition evaluation (from install.service logic) ────
-
-function evaluateCondition(condition: FeatureCondition, selectedFeatures: string[]): boolean {
-  if (condition.if === 'requireAny') {
-    return condition.features.some((f) => selectedFeatures.includes(f))
-  }
-  if (condition.if === 'requireAll') {
-    return condition.features.every((f) => selectedFeatures.includes(f))
-  }
-  return false
-}
+// ── Helper wrapping evaluateCondition for task-level usage ─────────────────────
 
 function shouldDownloadTask(
   condition: FeatureCondition | undefined,

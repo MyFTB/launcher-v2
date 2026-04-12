@@ -26,6 +26,10 @@ const api: ElectronAPI = {
     ipcRenderer.invoke('install:modpack', { reference, selectedFeatures }),
   installCancel: () => ipcRenderer.invoke('install:cancel'),
   installGetInstalled: () => ipcRenderer.invoke('install:get-installed'),
+  installGetPackFeatures: (packName) =>
+    ipcRenderer.invoke('install:get-pack-features', { packName }),
+  installChangeFeatures: (packName, selectedFeatures) =>
+    ipcRenderer.invoke('install:change-features', { packName, selectedFeatures }),
 
   // ── Launch ────────────────────────────────────────────────
   launchStart: (packName) => ipcRenderer.invoke('launch:start', { packName }),

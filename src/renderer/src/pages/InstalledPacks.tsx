@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
-import type { ModpackManifestReference, InstallProgressEvent, Feature } from '@shared/types'
+import type { ModpackManifestReference, InstallProgressEvent, Feature, ChangeFeaturesResult, PackFeaturesResult } from '@shared/types'
 import ModpackCard from '../components/ModpackCard'
 import ContextMenu from '../components/ContextMenu'
 import PackSettingsModal from '../components/PackSettingsModal'
@@ -20,6 +20,7 @@ export default function InstalledPacks() {
   const navigate = useNavigate()
   const [packs, setPacks] = useState<ModpackManifestReference[]>([])
   const [updateMap, setUpdateMap] = useState<Record<string, boolean>>({})
+  const [featuresMap, setFeaturesMap] = useState<Record<string, boolean>>({})
   const [loading, setLoading] = useState(true)
   const [reloading, setReloading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -28,6 +29,21 @@ export default function InstalledPacks() {
   const [uploadMessage, setUploadMessage] = useState<string | null>(null)
   const uploadTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<{ name: string; title: string } | null>(null)
+
+  // Feature-change (post-install reconfiguration) state
+  const [changingFeaturesPack, setChangingFeaturesPack] = useState<string | null>(null)
+  const [changingFeaturesData, setChangingFeaturesData] = useState<PackFeaturesResult | null>(null)
+  const [changeFeaturesProgress, setChangeFeaturesProgress] = useState<InstallProgressEvent | null>(null)
+  const [changeFeaturesResult, setChangeFeaturesResult] = useState<ChangeFeaturesResult | null>(null)
+  const changingFeaturesPackRef = useRef(changingFeaturesPack)
+  const changingFeaturesTitleRef = useRef<string>('')
+  useEffect(() => {
+    changingFeaturesPackRef.current = changingFeaturesPack
+    if (changingFeaturesPack) {
+      const pack = packs.find((p) => p.name === changingFeaturesPack)
+      changingFeaturesTitleRef.current = pack?.title ?? changingFeaturesPack
+    }
+  }, [changingFeaturesPack, packs])
 
   // Launch state lives in the store so it survives tab switches.
   const launchState = useLaunchStore((s) => s.launchState)
@@ -62,9 +78,14 @@ export default function InstalledPacks() {
       for (const p of filtered) {
         updates[p.name] = installedVersions[p.name] !== p.version
       }
+      const features: Record<string, boolean> = {}
+      for (const p of installed) {
+        features[p.name] = p.hasFeatures
+      }
 
       setPacks(filtered)
       setUpdateMap(updates)
+      setFeaturesMap(features)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Fehler beim Laden der installierten Modpacks')
     }
@@ -99,10 +120,24 @@ export default function InstalledPacks() {
         setUpdateProgress(null)
       }
     })
+    const unsubChangeFeaturesProgress = window.electronAPI.on('install:features-change-progress', (...args: unknown[]) => {
+      if (changingFeaturesPackRef.current) setChangeFeaturesProgress(args[0] as InstallProgressEvent)
+    })
+    const unsubChangeFeaturesComplete = window.electronAPI.on('install:features-change-complete', (...args: unknown[]) => {
+      if (!changingFeaturesPackRef.current) return
+      const event = args[0] as ChangeFeaturesResult
+      if (event.success) {
+        loadPacks().catch(() => {})
+      }
+      setChangeFeaturesProgress(null)
+      setChangeFeaturesResult(event)
+    })
     return () => {
       unsubProgress()
       unsubComplete()
       unsubFeatures()
+      unsubChangeFeaturesProgress()
+      unsubChangeFeaturesComplete()
     }
   }, [loadPacks])
 
@@ -191,6 +226,44 @@ export default function InstalledPacks() {
 
   const handleContextMenuClose = useCallback(() => setContextMenu(null), [])
 
+  const handleChangeFeatures = useCallback(async (packName: string) => {
+    try {
+      const data = await window.electronAPI.installGetPackFeatures(packName)
+      setChangingFeaturesPack(packName)
+      setChangingFeaturesData(data)
+    } catch (err) {
+      console.error('Failed to get pack features', err)
+    }
+  }, [])
+
+  const handleChangeFeaturesConfirm = useCallback((selectedFeatures: string[]) => {
+    if (!changingFeaturesPack) return
+    setChangingFeaturesData(null)
+    setChangeFeaturesProgress({ total: 0, finished: 0, failed: 0 })
+    setChangeFeaturesResult(null)
+    window.electronAPI.installChangeFeatures(changingFeaturesPack, selectedFeatures).catch((err) => {
+      console.error('Feature change error', err)
+      setChangingFeaturesPack(null)
+    })
+  }, [changingFeaturesPack])
+
+  const handleChangeFeaturesCancel = useCallback(() => {
+    setChangingFeaturesPack(null)
+    setChangingFeaturesData(null)
+  }, [])
+
+  const handleChangeFeaturesProgressCancel = useCallback(() => {
+    window.electronAPI.installCancel().catch(console.error)
+    setChangingFeaturesPack(null)
+    setChangeFeaturesProgress(null)
+    setChangeFeaturesResult(null)
+  }, [])
+
+  const handleChangeFeaturesResultDismiss = useCallback(() => {
+    setChangeFeaturesResult(null)
+    setChangingFeaturesPack(null)
+  }, [])
+
   const contextMenuItems = useMemo(() => {
     if (!contextMenu) return []
     const { packName } = contextMenu
@@ -205,6 +278,12 @@ export default function InstalledPacks() {
         label: 'Einstellungen',
         action: () => setPackSettingsTarget(packName),
       },
+      ...(featuresMap[packName] ? [{
+        label: 'Optionale Mods',
+        disabled: runningPack === packName || !!changingFeaturesPack || !!updatingPack,
+        title: runningPack === packName ? 'Modpack läuft gerade' : undefined,
+        action: () => handleChangeFeatures(packName),
+      }] : []),
       {
         label: 'Ordner öffnen',
         action: () => window.electronAPI.launchOpenFolder(packName),
@@ -229,7 +308,7 @@ export default function InstalledPacks() {
         action: () => handleDelete(packName),
       },
     ]
-  }, [contextMenu?.packName, packs, updateMap, runningPack, handleUpdate, handleUploadCrash, handleDelete])
+  }, [contextMenu?.packName, packs, updateMap, featuresMap, runningPack, changingFeaturesPack, updatingPack, handleUpdate, handleUploadCrash, handleDelete, handleChangeFeatures])
 
   const isGameRunning = launchState === 'running' || launchState === 'launching'
   const updateCount = Object.values(updateMap).filter(Boolean).length
@@ -373,6 +452,29 @@ export default function InstalledPacks() {
           features={pendingFeatures}
           onConfirm={handleFeatureConfirm}
           onCancel={handleFeatureCancel}
+        />
+      )}
+
+      {/* Post-install feature change: feature selection modal */}
+      {changingFeaturesData && (
+        <FeatureModal
+          features={changingFeaturesData.features}
+          initialSelection={changingFeaturesData.selected}
+          confirmLabel="Übernehmen"
+          onConfirm={handleChangeFeaturesConfirm}
+          onCancel={handleChangeFeaturesCancel}
+        />
+      )}
+
+      {/* Post-install feature change: progress modal */}
+      {changingFeaturesPack && !changingFeaturesData && (changeFeaturesProgress || changeFeaturesResult) && (
+        <ProgressModal
+          progress={changeFeaturesProgress}
+          packTitle={changingFeaturesTitleRef.current}
+          result={changeFeaturesResult}
+          successText="Features erfolgreich geändert!"
+          onCancel={handleChangeFeaturesProgressCancel}
+          onDismiss={handleChangeFeaturesResultDismiss}
         />
       )}
 

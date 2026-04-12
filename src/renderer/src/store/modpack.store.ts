@@ -21,6 +21,7 @@
 
 import { create } from 'zustand'
 import type {
+  ChangeFeaturesResult,
   Feature,
   InstallCompleteEvent,
   InstallNeedsFeaturesEvent,
@@ -32,7 +33,7 @@ import { ipc, onEvent } from '@renderer/ipc/client'
 // ─── State & actions ─────────────────────────────────────────────────────────
 
 /** Lightweight shape returned by installGetInstalled — not a full manifest. */
-type InstalledPackInfo = { name: string; version: string }
+type InstalledPackInfo = { name: string; version: string; hasFeatures: boolean }
 
 interface ModpackState {
   // ── Data ────────────────────────────────────────────────────────────────────
@@ -152,6 +153,15 @@ export const useModpackStore = create<ModpackState>()((set, get) => ({
       const event = args[0] as InstallNeedsFeaturesEvent
       // Pause the "pending" spinner until user confirms feature selection.
       set({ installPending: false, pendingFeatures: event.features })
+    })
+
+    // Feature-change completed — refresh installed list so sidebar stays current
+    // even if the user navigated away from InstalledPacks mid-operation.
+    onEvent('install:features-change-complete', (...args: unknown[]) => {
+      const event = args[0] as ChangeFeaturesResult
+      if (event.success) {
+        void get().fetchInstalled()
+      }
     })
   },
 }))

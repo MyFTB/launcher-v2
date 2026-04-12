@@ -18,6 +18,7 @@ import type {
   LauncherProfile,
   ModpackManifest,
   ModpackManifestReference,
+  PackFeaturesResult,
   Post,
   SystemInfoResult,
 } from '@shared/types'
@@ -91,8 +92,18 @@ export const ipc = {
      * A handler for that channel must be registered in the install service on
      * the main-process side (e.g. ipcMain.handle('install:get-installed', ...)).
      */
-    getInstalled(): Promise<{ name: string; version: string }[]> {
+    getInstalled(): Promise<{ name: string; version: string; hasFeatures: boolean }[]> {
       return window.electronAPI.installGetInstalled()
+    },
+
+    /** Get features and current selection for an installed pack. */
+    getPackFeatures(packName: string): Promise<PackFeaturesResult> {
+      return window.electronAPI.installGetPackFeatures(packName)
+    },
+
+    /** Change the feature selection of an installed pack. */
+    changeFeatures(packName: string, selectedFeatures: string[]): Promise<void> {
+      return window.electronAPI.installChangeFeatures(packName, selectedFeatures)
     },
   },
 

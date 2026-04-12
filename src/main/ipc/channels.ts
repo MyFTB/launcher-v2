@@ -44,6 +44,14 @@ export const IpcChannels = {
    * renderer must re-call INSTALL_MODPACK with selectedFeatures
    */
   INSTALL_NEEDS_FEATURES: 'install:needs-features',
+  /** Renderer→Main: Get features + current selection for an installed pack */
+  INSTALL_GET_PACK_FEATURES: 'install:get-pack-features',
+  /** Renderer→Main: Change the feature selection of an installed pack */
+  INSTALL_CHANGE_FEATURES: 'install:change-features',
+  /** Main→Renderer push: feature-change progress */
+  INSTALL_FEATURES_CHANGE_PROGRESS: 'install:features-change-progress',
+  /** Main→Renderer push: feature-change finished */
+  INSTALL_FEATURES_CHANGE_COMPLETE: 'install:features-change-complete',
 
   // ── Launch ───────────────────────────────────────────────────
   /** Renderer→Main: Launch a modpack */

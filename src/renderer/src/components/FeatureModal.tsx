@@ -5,11 +5,17 @@ interface FeatureModalProps {
   features: Feature[]
   onConfirm: (selectedNames: string[]) => void
   onCancel: () => void
+  /** Pre-select these features instead of using feature.default */
+  initialSelection?: string[]
+  /** Custom confirm button label (default: "Installieren") */
+  confirmLabel?: string
 }
 
-export default function FeatureModal({ features, onConfirm, onCancel }: FeatureModalProps) {
+export default function FeatureModal({ features, onConfirm, onCancel, initialSelection, confirmLabel }: FeatureModalProps) {
   const [selected, setSelected] = useState<Set<string>>(
-    () => new Set(features.filter((f) => f.default).map((f) => f.name))
+    () => initialSelection
+      ? new Set(initialSelection)
+      : new Set(features.filter((f) => f.default).map((f) => f.name))
   )
 
   function toggleFeature(name: string): void {
@@ -64,7 +70,7 @@ export default function FeatureModal({ features, onConfirm, onCancel }: FeatureM
             className="btn-primary"
             onClick={() => onConfirm(Array.from(selected))}
           >
-            Installieren
+            {confirmLabel ?? 'Installieren'}
           </button>
         </div>
       </div>
