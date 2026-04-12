@@ -1,5 +1,37 @@
 import { describe, it, expect } from 'vitest'
-import { formatLogArg } from '../main/logger'
+import { formatLogArg, sanitizeLogLine } from '../main/logger'
+
+describe('sanitizeLogLine', () => {
+  it('returns plain strings unchanged', () => {
+    expect(sanitizeLogLine('hello world')).toBe('hello world')
+  })
+
+  it('indents LF newlines to prevent log injection', () => {
+    expect(sanitizeLogLine('line1\nline2')).toBe('line1\n    line2')
+  })
+
+  it('indents CRLF newlines', () => {
+    expect(sanitizeLogLine('line1\r\nline2')).toBe('line1\n    line2')
+  })
+
+  it('indents bare CR newlines', () => {
+    expect(sanitizeLogLine('line1\rline2')).toBe('line1\n    line2')
+  })
+
+  it('handles multiple newlines (e.g. stack traces)', () => {
+    const input = 'Error: boom\n  at foo (bar.js:1)\n  at baz (qux.js:2)'
+    const expected = 'Error: boom\n      at foo (bar.js:1)\n      at baz (qux.js:2)'
+    expect(sanitizeLogLine(input)).toBe(expected)
+  })
+
+  it('prevents forged log entries', () => {
+    const malicious = 'safe text\n[2026-01-01T00:00:00Z] [INFO ] forged entry'
+    const result = sanitizeLogLine(malicious)
+    // The forged prefix should be indented, not at column 0
+    expect(result).toBe('safe text\n    [2026-01-01T00:00:00Z] [INFO ] forged entry')
+    expect(result.split('\n')[1]).toMatch(/^\s/)
+  })
+})
 
 describe('formatLogArg', () => {
   it('serialises a plain string', () => {

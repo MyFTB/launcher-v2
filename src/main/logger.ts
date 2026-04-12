@@ -38,6 +38,16 @@ type LogLevel = 'DEBUG' | 'INFO ' | 'WARN ' | 'ERROR'
 // ─── Exported helpers ──────────────────────────────────────────────────────────
 
 /**
+ * Sanitise a formatted log message so that embedded newlines cannot forge
+ * new log entries (log injection).  Continuation lines are indented with
+ * 4 spaces so they are visually distinct from real log entry prefixes.
+ * Exported for unit testing.
+ */
+export function sanitizeLogLine(message: string): string {
+  return message.replace(/\r\n|\r|\n/g, '\n    ')
+}
+
+/**
  * Serialise a single log argument to a string.
  * Exported for unit testing.
  *
@@ -105,19 +115,32 @@ class Logger {
   init(logsDir: string): void {
     this.logPath = path.join(logsDir, 'launcher.log')
 
-    // Truncate oversized log from previous sessions
+    // Truncate oversized log from previous sessions.
+    // All operations go through a single file descriptor to avoid
+    // TOCTOU race conditions (stat -> read -> write on the same fd).
+    let fd: number
     try {
-      const stat = fs.statSync(this.logPath)
+      fd = fs.openSync(this.logPath, 'r+')
+    } catch {
+      // File may not exist yet - that's fine
+      return
+    }
+    try {
+      const stat = fs.fstatSync(fd)
       if (stat.size > Logger.MAX_LOG_SIZE) {
-        const buf = fs.readFileSync(this.logPath, 'utf8')
+        const buf = fs.readFileSync(fd, 'utf8')
         // Keep only the last portion that fits within the limit
         const trimmed = buf.slice(buf.length - Logger.MAX_LOG_SIZE)
         // Start from the first full line to avoid a partial opening line
         const firstNewline = trimmed.indexOf('\n')
-        fs.writeFileSync(this.logPath, firstNewline >= 0 ? trimmed.slice(firstNewline + 1) : trimmed, 'utf8')
+        const content = firstNewline >= 0 ? trimmed.slice(firstNewline + 1) : trimmed
+        fs.ftruncateSync(fd, 0)
+        fs.writeSync(fd, content, 0, 'utf8')
       }
     } catch {
-      // File may not exist yet - that's fine
+      // Ignore errors during log truncation
+    } finally {
+      fs.closeSync(fd)
     }
   }
 
@@ -162,26 +185,27 @@ class Logger {
 
   private log(level: LogLevel, args: unknown[]): void {
     const ts = new Date().toISOString()
-    const message = this.formatArgs(args)
+    const message = sanitizeLogLine(this.formatArgs(args))
     const line = `[${ts}] [${level}] ${message}`
 
     this.writeLine(line)
 
-    // Use the saved originals to avoid infinite recursion when captureConsole()
+    // Use the sanitised formatted line for dev output to prevent log injection.
+    // The saved originals avoid infinite recursion when captureConsole()
     // has overridden the global console.
     if (this.isDev) {
       switch (level) {
         case 'ERROR':
-          this.origConsole.error(...args)
+          this.origConsole.error(line)
           break
         case 'WARN ':
-          this.origConsole.warn(...args)
+          this.origConsole.warn(line)
           break
         case 'DEBUG':
-          this.origConsole.debug(...args)
+          this.origConsole.debug(line)
           break
         default:
-          this.origConsole.log(...args)
+          this.origConsole.log(line)
       }
     }
   }
