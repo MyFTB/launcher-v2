@@ -42,7 +42,16 @@ export default function LoginModal({ onClose }: LoginModalProps) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm animate-fade-in">
-      <div className="card w-full max-w-sm mx-4 p-8 animate-slide-up shadow-2xl text-center">
+      <div className="card relative w-full max-w-sm mx-4 p-8 animate-slide-up shadow-2xl text-center">
+
+        <div className="flex justify-end mb-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="absolute top-4 right-4 text-text-secondary hover:text-text-primary transition-colors text-3xl leading-none">
+            ×
+          </button>
+      </div>
         {/* App logo */}
         <div className="flex justify-center mb-6">
           <div className="w-16 h-16 rounded-2xl bg-accent/10 border border-accent/30 flex items-center justify-center">
