@@ -12,7 +12,7 @@ const api: ElectronAPI = {
   // ── Auth ──────────────────────────────────────────────────
   authStartMicrosoft: () => ipcRenderer.invoke('auth:start-microsoft'),
   authLogout: () => ipcRenderer.invoke('auth:logout'),
-  authSwitchProfile: (uuid) => ipcRenderer.invoke('auth:switch-profile', { uuid }),
+  authSwitchProfile: (uuid) => ipcRenderer.invoke('auth:switch-profile', uuid),
 
   // ── Packs ─────────────────────────────────────────────────
   packsGetRemote: () => ipcRenderer.invoke('packs:get-remote'),
