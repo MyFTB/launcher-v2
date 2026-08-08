@@ -1,120 +1,74 @@
-// ============================================================
-// MyFTB Launcher v2 — Launch Service
-// Electron main-process Minecraft launch service.
-// Replaces LaunchMinecraft.java using @xmcl/core.
-// ============================================================
-
 import path from 'node:path'
 import fs from 'node:fs/promises'
-import { createInterface } from 'node:readline'
-import { ChildProcess } from 'node:child_process'
-import { ipcMain, shell, app, BrowserWindow } from 'electron'
-import { launch as xmclLaunch, generateArguments } from '@xmcl/core'
+import { createHash, randomUUID } from 'node:crypto'
+import { createInterface, type Interface as ReadlineInterface } from 'node:readline'
+import { execFile, type ChildProcess } from 'node:child_process'
+import { promisify } from 'node:util'
+import { app, shell } from 'electron'
+import { launch as xmclLaunch } from '@xmcl/core'
 
 import { IpcChannels } from '../ipc/channels'
+import { IpcError, noPayload, requireObject, secureHandle } from '../ipc/security'
 import { Constants, fmt } from '../constants'
-import { configService } from './config.service'
+import { getTrustedWindows } from '../app-state'
+import { configService, atomicWriteFile } from './config.service'
 import { getSelectedProfile } from './auth.service'
 import { installService } from './install.service'
 import { resolveJavaPath } from './java.service'
+import { discordService } from './discord.service'
+import { packOperationService, PackOperationConflictError } from './pack-operation.service'
 import { logger } from '../logger'
+import { assertContainedNoLinks } from '../filesystem-safety'
+import { fetchWithRetry, readJsonResponseLimited } from '../fetch-retry'
 import type {
-  LaunchStartPayload,
-  LaunchOpenFolderPayload,
-  LaunchDeletePayload,
   LaunchCreateShortcutPayload,
-  LaunchStateEvent,
+  LaunchDeletePayload,
   LaunchLogEvent,
-  ModpackManifestReference,
-  LauncherProfile,
+  LaunchOpenFolderPayload,
+  LaunchSession,
+  LaunchStartPayload,
+  LaunchStartResult,
+  LaunchStateEvent,
   LauncherConfig,
+  ModpackManifestReference,
 } from '../../shared/types'
+import {
+  assertPackName,
+  assertSessionId,
+  filterSafeRemoteJvmArgs,
+  validateModpackReference,
+} from '../../shared/validation'
 
-// ─── Discord service (optional — may not be present in all builds) ───────────
-
-function getDiscordService(): {
-  setPlaying(packTitle: string): void
-  setIdle(): void
-} | null {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    return require('./discord.service').discordService
-  } catch {
-    return null
-  }
-}
-
-// ─── Child-process environment sanitization ─────────────────────────────────
-
-/**
- * Electron on Linux may inject its own directory into LD_LIBRARY_PATH,
- * which contains Chromium's bundled libGLESv2.so, libEGL.so, libvulkan.so,
- * etc. When the child Java process inherits this, LWJGL can load the wrong
- * native libraries, causing "stack smashing detected" (SIGABRT) or similar
- * native crashes.
- *
- * This function returns a cleaned copy of process.env suitable for spawning
- * Minecraft. On Linux it strips Electron-injected paths from LD_LIBRARY_PATH
- * and removes LD_PRELOAD entirely (Electron may set it for sandbox/crash
- * reporting). On other platforms the env is returned unchanged.
- *
- * Exported for testing - see src/tests/launch-env.test.ts
- */
 export function buildChildEnv(
   env: Record<string, string | undefined> = process.env,
 ): Record<string, string | undefined> {
   if (process.platform !== 'linux') return { ...env }
-
   const cleaned = { ...env }
-
-  // LD_PRELOAD can point to Electron's crash-handler .so - remove entirely.
   delete cleaned.LD_PRELOAD
-
-  // Filter LD_LIBRARY_PATH entries that look like they belong to Electron.
-  // Electron dirs typically contain electron, chrome, or the app's binary.
-  const ldPath = env.LD_LIBRARY_PATH
-  if (ldPath) {
-    const filtered = ldPath
+  const libraryPath = env.LD_LIBRARY_PATH
+  if (libraryPath) {
+    const filtered = libraryPath
       .split(':')
-      .filter((p) => {
-        const lower = p.toLowerCase()
-        return (
-          !lower.includes('electron') &&
-          !lower.includes('/app.asar') &&
-          !lower.includes('/chrome') &&
-          !lower.includes('/chromium')
-        )
+      .filter((entry) => {
+        const lower = entry.toLowerCase()
+        return !lower.includes('electron')
+          && !lower.includes('/app.asar')
+          && !lower.includes('/chrome')
+          && !lower.includes('/chromium')
       })
       .join(':')
-    if (filtered) {
-      cleaned.LD_LIBRARY_PATH = filtered
-    } else {
-      delete cleaned.LD_LIBRARY_PATH
-    }
+    if (filtered) cleaned.LD_LIBRARY_PATH = filtered
+    else delete cleaned.LD_LIBRARY_PATH
   }
-
   return cleaned
 }
 
-// ─── Log4j XML parser ────────────────────────────────────────────────────────
-
-/**
- * Converts raw Minecraft log4j XML events to human-readable log lines.
- *
- * Minecraft pipes log4j XML events to stdout, e.g.:
- *   <log4j:Event logger="net.minecraft...." level="INFO" thread="main" timeMillis="...">
- *     <log4j:Message><![CDATA[Starting Minecraft]]></log4j:Message>
- *   </log4j:Event>
- *
- * Both single-line and multi-line events are handled. Non-XML lines pass through unchanged.
- */
 class Log4jParser {
   private buffer = ''
 
   feed(rawLine: string): string[] {
-    // Mid-event accumulation
-    if (this.buffer.length > 0) {
-      this.buffer += '\n' + rawLine
+    if (this.buffer) {
+      this.buffer += `\n${rawLine}`
       if (rawLine.includes('</log4j:Event>')) {
         const formatted = this.formatEvent(this.buffer)
         this.buffer = ''
@@ -122,628 +76,762 @@ class Log4jParser {
       }
       return []
     }
-
     if (rawLine.includes('<log4j:Event')) {
-      if (rawLine.includes('</log4j:Event>')) {
-        return [this.formatEvent(rawLine)]   // single-line event
-      }
-      this.buffer = rawLine                  // start of multi-line event
+      if (rawLine.includes('</log4j:Event>')) return [this.formatEvent(rawLine)]
+      this.buffer = rawLine
       return []
     }
-
-    return [rawLine]                         // plain text — pass through
+    return [rawLine]
   }
 
   private formatEvent(xml: string): string {
-    const level   = xml.match(/level="([^"]+)"/)?.[1]                  ?? 'INFO'
-    const thread  = xml.match(/thread="([^"]+)"/)?.[1]                 ?? 'main'
-    const msMatch = xml.match(/(?:timeMillis|timestamp)="(\d+)"/)
-    const msgMatch =
-      xml.match(/<log4j:Message><!\[CDATA\[([\s\S]*?)\]\]><\/log4j:Message>/) ??
-      xml.match(/<log4j:Message>([\s\S]*?)<\/log4j:Message>/)
-
-    const message = (msgMatch?.[1] ?? xml).trim()
-
-    let timeStr = ''
-    if (msMatch) {
-      const d = new Date(parseInt(msMatch[1]))
-      timeStr = `[${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}] `
-    }
-
-    return `${timeStr}[${thread}/${level}]: ${message}`
+    const level = xml.match(/level="([^"]+)"/)?.[1] ?? 'INFO'
+    const thread = xml.match(/thread="([^"]+)"/)?.[1] ?? 'main'
+    const timestamp = xml.match(/(?:timeMillis|timestamp)="(\d+)"/)?.[1]
+    const message = (
+      xml.match(/<log4j:Message><!\[CDATA\[([\s\S]*?)\]\]><\/log4j:Message>/)?.[1]
+      ?? xml.match(/<log4j:Message>([\s\S]*?)<\/log4j:Message>/)?.[1]
+      ?? xml
+    ).trim()
+    const time = timestamp
+      ? (() => {
+          const date = new Date(Number(timestamp))
+          return `[${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:${String(date.getSeconds()).padStart(2, '0')}] `
+        })()
+      : ''
+    return `${time}[${thread}/${level}]: ${message}`
   }
 }
 
-// ─── Paste upload helper ─────────────────────────────────────────────────────
-
-/**
- * Upload raw text to paste.myftb.de (Hastebin-compatible).
- * Returns the full URL of the created paste.
- */
 async function uploadToPaste(text: string): Promise<string> {
+  if (Buffer.byteLength(text, 'utf8') > 10 * 1024 * 1024) {
+    throw new IpcError('INVALID_PAYLOAD', 'Der Log ist zu groß zum Hochladen.')
+  }
   const response = await fetch(`${Constants.pasteTarget}/documents`, {
     method: 'POST',
-    // CodeQL[js/file-access-to-http]: user explicitly triggers log upload to paste.myftb.de for debugging
-    body: Buffer.from(text, 'utf-8'),
+    body: Buffer.from(text, 'utf8'),
     signal: AbortSignal.timeout(Constants.connectTimeoutMs),
   })
-
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status} ${response.statusText}`)
+  if (!response.ok) throw new Error(`Log-Upload fehlgeschlagen (HTTP ${response.status}).`)
+  const json = await response.json() as { key?: unknown }
+  if (typeof json.key !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(json.key)) {
+    throw new Error('Der Log-Dienst hat eine ungültige Antwort gesendet.')
   }
-
-  const json = (await response.json()) as { key: string }
   return `${Constants.pasteTarget}/${json.key}`
 }
 
-// ─── Fetch remote pack reference ─────────────────────────────────────────────
-
-/**
- * Fetch the remote pack list and find a reference by pack name.
- * Returns null when the network is unavailable or the pack is not listed.
- */
-async function fetchRemoteReference(
-  packName: string,
-): Promise<ModpackManifestReference | null> {
-  const packKey = configService.get().packKey
-  const url = fmt(Constants.packList, packKey)
-
+async function fetchRemoteReference(packName: string): Promise<ModpackManifestReference | null> {
   try {
-    const response = await fetch(url, { signal: AbortSignal.timeout(Constants.connectTimeoutMs) })
+    const response = await fetchWithRetry(fmt(Constants.packList, configService.get().packKey), {
+      timeoutMs: Constants.connectTimeoutMs,
+    })
     if (!response.ok) return null
-    const list = (await response.json()) as ModpackManifestReference[] | { packages?: ModpackManifestReference[] }
-    const data = Array.isArray(list) ? list : list.packages ?? []
-    return data.find((r) => r.name === packName) ?? null
+    const body = await readJsonResponseLimited(response, 10 * 1024 * 1024)
+    const raw = Array.isArray(body)
+      ? body
+      : typeof body === 'object' && body !== null && Array.isArray((body as { packages?: unknown }).packages)
+        ? (body as { packages: unknown[] }).packages
+        : []
+    for (const item of raw) {
+      try {
+        const reference = validateModpackReference(item)
+        if (reference.name === packName) return reference
+      } catch {
+        // Ignore malformed remote entries.
+      }
+    }
+  } catch {
+    // Offline launch intentionally continues from the local manifest.
+  }
+  return null
+}
+
+function sendToTrustedWindows(channel: string, payload: unknown): void {
+  for (const window of getTrustedWindows()) window.webContents.send(channel, payload)
+}
+
+class CircularLineBuffer {
+  private readonly lines: Array<string | undefined>
+  private start = 0
+  private size = 0
+
+  constructor(private readonly capacity: number) {
+    this.lines = new Array(capacity)
+  }
+
+  push(line: string): void {
+    if (this.capacity <= 0) return
+    if (this.size < this.capacity) {
+      this.lines[(this.start + this.size) % this.capacity] = line
+      this.size++
+      return
+    }
+    this.lines[this.start] = line
+    this.start = (this.start + 1) % this.capacity
+  }
+
+  getText(): string {
+    const output = new Array<string>(this.size)
+    for (let index = 0; index < this.size; index++) {
+      output[index] = this.lines[(this.start + index) % this.capacity] ?? ''
+    }
+    return output.join('\n')
+  }
+}
+
+interface InternalLaunchSession {
+  data: LaunchSession
+  child?: ChildProcess
+  preparationAbort?: AbortController
+  readers: ReadlineInterface[]
+  log: CircularLineBuffer
+}
+
+function cloneSession(session: LaunchSession): LaunchSession {
+  return { ...session }
+}
+
+const execFileAsync = promisify(execFile)
+
+async function getProcessIdentity(pid: number): Promise<string | null> {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return null
+  try {
+    let identity: string
+    if (process.platform === 'linux') {
+      const [stat, executable] = await Promise.all([
+        fs.readFile(`/proc/${pid}/stat`, 'utf8'),
+        fs.realpath(`/proc/${pid}/exe`),
+      ])
+      const fields = stat.slice(stat.lastIndexOf(')') + 1).trim().split(/\s+/)
+      const startTicks = fields[19]
+      if (!startTicks) return null
+      identity = `${startTicks}\0${executable}`
+    } else if (process.platform === 'darwin') {
+      const result = await execFileAsync('/bin/ps', ['-p', String(pid), '-o', 'lstart=', '-o', 'comm='], {
+        encoding: 'utf8',
+        timeout: 3_000,
+        maxBuffer: 64 * 1024,
+      })
+      identity = result.stdout.trim()
+    } else if (process.platform === 'win32') {
+      const script = `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}" | Select-Object CreationDate,ExecutablePath | ConvertTo-Json -Compress)`
+      const result = await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+        encoding: 'utf8',
+        timeout: 5_000,
+        windowsHide: true,
+        maxBuffer: 64 * 1024,
+      })
+      identity = result.stdout.trim()
+    } else {
+      return null
+    }
+    return identity ? createHash('sha256').update(identity).digest('hex') : null
   } catch {
     return null
   }
 }
 
-// ─── Push-event helpers ───────────────────────────────────────────────────────
-
-function sendToAllWindows(channel: string, payload: unknown): void {
-  BrowserWindow.getAllWindows().forEach((win) => {
-    if (!win.isDestroyed()) win.webContents.send(channel, payload)
-  })
+async function getProcessIdentityWithRetry(pid: number): Promise<string | null> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const identity = await getProcessIdentity(pid)
+    if (identity) return identity
+    if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)))
+  }
+  return null
 }
-
-function sendState(event: LaunchStateEvent): void {
-  sendToAllWindows(IpcChannels.LAUNCH_STATE, event)
-}
-
-function sendLogLine(event: LaunchLogEvent): void {
-  sendToAllWindows(IpcChannels.LAUNCH_LOG, event)
-}
-
-// ─── Circular log buffer ─────────────────────────────────────────────────────
-
-class CircularLineBuffer {
-  private readonly cap: number
-  private lines: string[] = []
-
-  constructor(cap: number) {
-    this.cap = cap
-  }
-
-  push(line: string): void {
-    if (this.lines.length >= this.cap) {
-      // Drop oldest entry (index 0) before appending new one.
-      this.lines.shift()
-    }
-    this.lines.push(line)
-  }
-
-  getAll(): string[] {
-    return this.lines.slice()
-  }
-
-  getText(): string {
-    return this.lines.join('\n')
-  }
-
-  clear(): void {
-    this.lines = []
-  }
-}
-
-// ─── Service ─────────────────────────────────────────────────────────────────
 
 class LaunchService {
-  // ── State ──────────────────────────────────────────────────────────────────
+  private readonly sessions = new Map<string, InternalLaunchSession>()
+  private registryPoll: ReturnType<typeof setInterval> | null = null
+  private persistenceQueue: Promise<void> = Promise.resolve()
 
-  private isRunning = false
-  private currentPackName: string | null = null
-  private childProcess: ChildProcess | null = null
-  private logBuffer = new CircularLineBuffer(Constants.logMaxLines)
+  private get registryPath(): string {
+    return path.join(app.getPath('userData'), 'launch-sessions.json')
+  }
 
-  // ── Lifecycle ──────────────────────────────────────────────────────────────
+  async initialize(): Promise<void> {
+    try {
+      const registryStat = await fs.lstat(this.registryPath)
+      if (!registryStat.isFile() || registryStat.isSymbolicLink() || registryStat.size > 1024 * 1024) {
+        throw new Error('Invalid launch-session registry file')
+      }
+      const raw = JSON.parse(await fs.readFile(this.registryPath, 'utf8')) as unknown
+      if (Array.isArray(raw)) {
+        const restoredPids = new Set<number>()
+        for (const candidate of raw.slice(0, 20)) {
+          if (typeof candidate !== 'object' || candidate === null) continue
+          const record = candidate as Partial<LaunchSession>
+          try {
+            const id = assertSessionId(record.id)
+            const packName = assertPackName(record.packName)
+            if (
+              typeof record.pid !== 'number'
+              || restoredPids.has(record.pid)
+              || typeof record.processIdentity !== 'string'
+              || !/^[0-9a-f]{64}$/i.test(record.processIdentity)
+            ) continue
+            const currentIdentity = await getProcessIdentity(record.pid)
+            if (!currentIdentity || currentIdentity !== record.processIdentity) continue
+            const now = Date.now()
+            const data: LaunchSession = {
+              id,
+              packName,
+              packTitle: typeof record.packTitle === 'string' ? record.packTitle.slice(0, 256) : packName,
+              pid: record.pid,
+              processIdentity: record.processIdentity,
+              state: 'running',
+              startedAt: typeof record.startedAt === 'number' ? record.startedAt : now,
+              updatedAt: now,
+              detached: true,
+            }
+            packOperationService.reserveLaunch(packName, `launch:${id}`)
+            restoredPids.add(record.pid)
+            this.sessions.set(id, { data, readers: [], log: new CircularLineBuffer(Constants.logMaxLines) })
+            discordService.setPlaying(id, data.packTitle, data.startedAt)
+          } catch {
+            // Ignore malformed registry entries.
+          }
+        }
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        logger.warn('[LaunchService] Launch-session registry was invalid and has been rebuilt')
+      }
+    }
+    await this.persistRegistry()
+    this.registryPoll = setInterval(() => {
+      void this.reconcileDetachedProcesses().catch((error: unknown) => {
+        logger.warn('[LaunchService] Detached-session reconciliation failed:', error)
+      })
+    }, 10_000)
+    this.registryPoll.unref?.()
+  }
 
   registerHandlers(): void {
-    this.handleLaunchStart()
-    this.handleLaunchKill()
-    this.handleLaunchGetLog()
-    this.handleLaunchOpenFolder()
-    this.handleLaunchDeletePack()
-    this.handleLaunchCreateShortcut()
-    this.handleLaunchUploadCrash()
-    this.handleLaunchUploadLog()
-  }
-
-  // ── IPC: launch:start ──────────────────────────────────────────────────────
-
-  private handleLaunchStart(): void {
-    ipcMain.handle(
+    secureHandle(
       IpcChannels.LAUNCH_START,
-      async (_event, payload: LaunchStartPayload): Promise<void> => {
-        const { packName } = payload
-
-        if (this.isRunning) {
-          throw new Error(`Minecraft is already running (${this.currentPackName ?? 'unknown'})`)
-        }
-
-        // ── 1. Auth ──────────────────────────────────────────────────────────
-        let profile: LauncherProfile
-        try {
-          profile = await getSelectedProfile()
-        } catch (err) {
-          throw new Error(
-            `No authenticated profile: ${err instanceof Error ? err.message : String(err)}`,
-          )
-        }
-
-        logger.info(`[LaunchService] Launch requested: "${packName}" as ${profile.lastKnownUsername}`)
-
-        // ── 2. Load installed manifest ────────────────────────────────────────
-        let manifest = await installService.getManifestByName(packName)
-        if (!manifest) {
-          throw new Error(`Pack "${packName}" is not installed`)
-        }
-
-        // ── 3. Outdated check / auto-update ───────────────────────────────────
-        const remoteRef = await fetchRemoteReference(packName)
-        if (remoteRef && remoteRef.version !== manifest.version) {
-          logger.info(
-            `[LaunchService] Pack "${packName}" is outdated (local ${manifest.version} -> remote ${remoteRef.version}), installing update...`,
-          )
-          const success = await installService.installModpack(remoteRef)
-          if (!success) {
-            // Auto-update may fail due to a busy install or a real error.
-            // Continue launching with the currently installed version instead of throwing.
-            logger.warn(`[LaunchService] Auto-update of "${packName}" skipped or failed - launching with installed version`)
-          } else {
-            // Re-load manifest after update so we have the latest version.
-            const updated = await installService.getManifestByName(packName)
-            if (updated) {
-              manifest = updated
-            }
-          }
-        }
-
-        // ── 4. Resolve paths ──────────────────────────────────────────────────
-        const instanceDir = await this.resolveInstanceDir(packName)
-        const minecraftDir = configService.getInstallDir()
-
-        // ── 5. Build LaunchOption ─────────────────────────────────────────────
-        const config = configService.get()
-        const packOverride = config.packConfigs?.[packName] ?? {}
-
-        const effectiveMinMemory = packOverride.minMemory ?? config.minMemory
-        const effectiveMaxMemory = packOverride.maxMemory ?? config.maxMemory
-        const effectiveJvmArgs   = packOverride.jvmArgs   ?? config.jvmArgs
-
-        if (Object.keys(packOverride).length > 0) {
-          logger.info(
-            `[LaunchService] Pack overrides for "${packName}": ` +
-            `mem ${effectiveMinMemory}-${effectiveMaxMemory} MB, ` +
-            `jvmArgs: "${effectiveJvmArgs}"`,
-          )
-        }
-
-        // UUID without dashes (Minecraft auth expectation)
-        const uuidNoDashes = profile.uuid.replace(/-/g, '')
-
-        // Extra JVM args from effective config string (pack override -> global fallback)
-        const extraJVMArgs: string[] = effectiveJvmArgs
-          ? effectiveJvmArgs
-              .trim()
-              .split(/\s+/)
-              .filter((a) => a.length > 0)
-          : []
-
-        // Per-pack launch flags from manifest (keyed by 'flags' or platform)
-        if (manifest.launch) {
-          const platformKey = process.platform === 'win32'
-            ? 'windows'
-            : process.platform === 'darwin'
-            ? 'osx'
-            : 'linux'
-          const platformFlags = manifest.launch[platformKey] ?? manifest.launch['flags'] ?? []
-          extraJVMArgs.push(...platformFlags)
-        }
-
-        // Java binary path — resolved via java.service (bundled runtime, system scan, fallback)
-        const javaPath = await resolveJavaPath(manifest)
-
-        // Sanitize env for child process (strips Electron-injected LD_LIBRARY_PATH on Linux)
-        const childEnv = buildChildEnv()
-
-        const launchOptions = {
-          gamePath: instanceDir,
-          resourcePath: minecraftDir,           // must be a plain string
-          version: manifest.versionManifest.id,
-          accessToken: profile.minecraftAccessToken,
-          gameProfile: { id: uuidNoDashes, name: profile.lastKnownUsername },
-          userType: 'msa' as unknown as 'mojang', // @xmcl/core types predate MSA; 'msa' is correct at runtime
-          minMemory: effectiveMinMemory,
-          maxMemory: effectiveMaxMemory,
-          extraJVMArgs,
-          resolution: { width: config.gameWidth, height: config.gameHeight },
-          javaPath,
-          launcherName: 'MyFTBLauncher',
-          launcherBrand: 'MyFTBLauncher',
-          // detached: true moves the child to its own process group so it is
-          // not killed when the launcher window closes (Windows Job Object).
-          extraExecOption: { detached: true, env: childEnv },
-        }
-
-        // ── 6. Emit launching state ───────────────────────────────────────────
-        logger.info(
-          `[LaunchService] Starting "${packName}" | MC ${manifest.versionManifest.id}` +
-          ` | Java: ${javaPath} | mem: ${effectiveMinMemory}-${effectiveMaxMemory} MB`,
-        )
-        sendState({ state: 'launching' })
-
-        // Log full command line for debugging native crashes
-        try {
-          const args = await generateArguments(launchOptions)
-          logger.debug(`[LaunchService] Full command: ${args.join(' ')}`)
-        } catch {
-          // Non-fatal - don't block launch if arg generation fails
-        }
-
-        // ── 7. Start Minecraft ────────────────────────────────────────────────
-        let child: ChildProcess
-        try {
-          child = await xmclLaunch(launchOptions)
-        } catch (err) {
-          sendState({ state: 'closed', exitCode: -1 })
-          throw new Error(
-            `Failed to launch Minecraft: ${err instanceof Error ? err.message : String(err)}`,
-          )
-        }
-
-        this.isRunning = true
-        this.currentPackName = packName
-        this.childProcess = child
-        this.logBuffer.clear()
-
-        logger.info(`[LaunchService] Minecraft process started (PID: ${child.pid ?? 'unknown'})`)
-
-        // ── Emit running state & record last-played ───────────────────────────
-        sendState({ state: 'running' })
-        const prevConfig = configService.get()
-        configService.merge({
-          lastPlayedPacks: [
-            packName,
-            ...prevConfig.lastPlayedPacks.filter((n) => n !== packName),
-          ].slice(0, Constants.recentPacksMax),
-        })
-        configService.save().catch((err) => {
-          logger.error('[LaunchService] Failed to save lastPlayedPacks:', err)
-        })
-
-        // Discord presence
-        try {
-          getDiscordService()?.setPlaying(manifest.title)
-        } catch {
-          // Non-fatal
-        }
-
-        // ── 8. Pipe stdout / stderr ───────────────────────────────────────────
-        const attachStream = (stream: NodeJS.ReadableStream | null): void => {
-          if (!stream) return
-          const parser = new Log4jParser()
-          const rl = createInterface({ input: stream, crlfDelay: Infinity })
-          rl.on('line', (rawLine) => {
-            for (const line of parser.feed(rawLine)) {
-              this.logBuffer.push(line)
-              sendLogLine({ line })
-            }
-          })
-        }
-
-        attachStream(child.stdout)
-        attachStream(child.stderr)
-
-        // ── 9. Handle process exit ────────────────────────────────────────────
-        child.on('close', (exitCode) => {
-          const code = exitCode ?? -1
-          logger.info(`[LaunchService] Minecraft exited: code ${code} (${code === 0 ? 'clean exit' : 'crash / forced kill'})`)
-          const exitLine = `\nProcess exited with code ${code}`
-          this.logBuffer.push(exitLine)
-          sendLogLine({ line: exitLine })
-
-          this.isRunning = false
-          this.currentPackName = null
-          this.childProcess = null
-
-          const state = code === 0 ? 'closed' : 'crashed'
-          sendState({ state, exitCode: code })
-
-          // Clear Discord presence
-          try {
-            getDiscordService()?.setIdle()
-          } catch {
-            // Non-fatal
-          }
-        })
+      {
+        validate: (value): LaunchStartPayload => {
+          const payload = requireObject(value)
+          return { packName: assertPackName(payload.packName) }
+        },
       },
+      async (_event, payload): Promise<LaunchStartResult> => ({
+        session: await this.start(payload.packName),
+      }),
     )
-  }
-
-  // ── IPC: launch:kill ───────────────────────────────────────────────────────
-
-  private handleLaunchKill(): void {
-    ipcMain.handle(IpcChannels.LAUNCH_KILL, (): void => {
-      if (this.childProcess && this.isRunning) {
-        logger.info(`[LaunchService] Kill requested for "${this.currentPackName ?? 'unknown'}"`)
-        this.childProcess.kill()
-      }
-    })
-  }
-
-  /**
-   * Detach the running Minecraft process so it survives launcher close.
-   * Called from the `before-quit` handler in index.ts.
-   */
-  detach(): void {
-    const child = this.childProcess
-    if (!child) return
-    logger.info(`[LaunchService] Detaching Minecraft (PID: ${child.pid ?? 'unknown'}) - launcher closing`)
-    child.unref()
-    this.childProcess = null
-  }
-
-  // ── IPC: launch:get-log ────────────────────────────────────────────────────
-
-  private handleLaunchGetLog(): void {
-    ipcMain.handle(IpcChannels.LAUNCH_GET_LOG, (): string => {
-      return this.logBuffer.getText()
-    })
-  }
-
-  // ── IPC: launch:open-folder ────────────────────────────────────────────────
-
-  private handleLaunchOpenFolder(): void {
-    ipcMain.handle(
+    secureHandle(
+      IpcChannels.LAUNCH_KILL,
+      {
+        roles: ['launcher', 'console'],
+        validate: (value) => ({ sessionId: assertSessionId(requireObject(value).sessionId) }),
+      },
+      (_event, { sessionId }) => this.kill(sessionId),
+    )
+    secureHandle(
+      IpcChannels.LAUNCH_GET_SESSIONS,
+      { roles: ['launcher', 'console'], validate: noPayload },
+      () => this.listSessions(),
+    )
+    secureHandle(
+      IpcChannels.LAUNCH_GET_LOG,
+      {
+        roles: ['launcher', 'console'],
+        validate: (value) => ({ sessionId: assertSessionId(requireObject(value).sessionId) }),
+      },
+      (_event, { sessionId }) => this.getLog(sessionId),
+    )
+    secureHandle(
       IpcChannels.LAUNCH_OPEN_FOLDER,
-      async (_event, payload: LaunchOpenFolderPayload): Promise<void> => {
-        const instanceDir = await this.resolveInstanceDir(payload.packName)
-        await shell.openPath(instanceDir)
+      { validate: this.packPayload },
+      async (_event, payload: LaunchOpenFolderPayload) => {
+        await shell.openPath(await this.resolveInstanceDir(payload.packName, false))
       },
     )
-  }
-
-  // ── IPC: launch:delete-pack ────────────────────────────────────────────────
-
-  private handleLaunchDeletePack(): void {
-    ipcMain.handle(
+    secureHandle(
       IpcChannels.LAUNCH_DELETE_PACK,
-      async (_event, payload: LaunchDeletePayload): Promise<{ success: boolean; error?: string }> => {
-        if (this.isRunning && this.currentPackName === payload.packName) {
-          return { success: false, error: 'Das Modpack kann nicht geloescht werden, waehrend es laeuft.' }
-        }
-
-        try {
-          const instanceDir = await this.resolveInstanceDir(payload.packName)
-          await fs.rm(instanceDir, { recursive: true, force: true })
-
-          // Remove per-pack config and lastPlayedPacks entry
-          const cfg = configService.get()
-          const updates: Partial<LauncherConfig> = {}
-
-          if (cfg.packConfigs?.[payload.packName]) {
-            const { [payload.packName]: _removed, ...rest } = cfg.packConfigs
-            updates.packConfigs = rest
-          }
-
-          if (cfg.lastPlayedPacks?.includes(payload.packName)) {
-            updates.lastPlayedPacks = cfg.lastPlayedPacks.filter((n) => n !== payload.packName)
-          }
-
-          if (Object.keys(updates).length > 0) {
-            configService.merge(updates)
-            await configService.save()
-          }
-
-          logger.info(`[LaunchService] Pack deleted: "${payload.packName}"`)
-          return { success: true }
-        } catch (err) {
-          logger.error(`[LaunchService] Failed to delete pack "${payload.packName}":`, err)
-          return { success: false, error: 'Das Modpack konnte nicht geloescht werden.' }
-        }
-      },
+      { validate: this.packPayload },
+      (_event, payload: LaunchDeletePayload) => this.deletePack(payload.packName),
     )
-  }
-
-  // ── IPC: launch:create-shortcut ───────────────────────────────────────────
-
-  private handleLaunchCreateShortcut(): void {
-    ipcMain.handle(
+    secureHandle(
       IpcChannels.LAUNCH_CREATE_SHORTCUT,
-      async (_event, payload: LaunchCreateShortcutPayload): Promise<void> => {
-        const { packName } = payload
-        logger.info(`[LaunchService] Creating desktop shortcut for "${packName}"`)
-        const executablePath = app.getPath('exe')
-        const desktopPath = app.getPath('desktop')
-
-        if (process.platform === 'win32') {
-          // Windows: use Electron's built-in shell.writeShortcutLink()
-          const shortcutPath = path.join(desktopPath, `${packName}.lnk`)
-
-          // Attempt to find a pack icon inside the instance directory.
-          const instanceDir = await this.resolveInstanceDir(packName)
-          const iconCandidates = [
-            path.join(instanceDir, 'pack.ico'),
-            path.join(instanceDir, 'pack.png'),
-          ]
-          let iconPath = executablePath
-          for (const candidate of iconCandidates) {
-            try {
-              await fs.access(candidate)
-              iconPath = candidate
-              break
-            } catch {
-              // Try next candidate
-            }
-          }
-
-          const success = shell.writeShortcutLink(shortcutPath, 'create', {
-            target: executablePath,
-            args: `--pack "${packName}"`,
-            icon: iconPath,
-            iconIndex: 0,
-          })
-
-          if (!success) {
-            throw new Error(`Failed to create Windows shortcut for "${packName}"`)
-          }
-        } else if (process.platform === 'linux') {
-          // Linux: write a .desktop entry file
-          const shortcutPath = path.join(desktopPath, `${packName}.desktop`)
-          const instanceDir = await this.resolveInstanceDir(packName)
-
-          // Use pack logo if available
-          const iconCandidates = [
-            path.join(instanceDir, 'pack.png'),
-            path.join(instanceDir, 'pack.svg'),
-          ]
-          let iconLine = `Icon=${executablePath}`
-          for (const candidate of iconCandidates) {
-            try {
-              await fs.access(candidate)
-              iconLine = `Icon=${candidate}`
-              break
-            } catch {
-              // Try next candidate
-            }
-          }
-
-          // Strip newlines and quotes so pack name cannot inject .desktop entries or break Exec=
-          const safePackName = packName.replace(/[\n\r"\\$`]/g, ' ').trim()
-          const desktopEntry = [
-            '[Desktop Entry]',
-            'Type=Application',
-            'Version=1.0',
-            `Name=MyFTB – ${safePackName}`,
-            `Comment=Launch the MyFTB modpack "${safePackName}"`,
-            `Exec=${executablePath} --pack "${safePackName}"`,
-            iconLine,
-            'Terminal=false',
-            'Categories=Game;',
-          ].join('\n')
-
-          await fs.writeFile(shortcutPath, desktopEntry, 'utf8')
-
-          // Make the .desktop file executable so the desktop environment accepts it
-          try {
-            await fs.chmod(shortcutPath, 0o755)
-          } catch {
-            // chmod failure is non-fatal
-          }
-        }
-        // macOS: no standard desktop shortcut format — skip silently
-      },
+      { validate: this.packPayload },
+      (_event, payload: LaunchCreateShortcutPayload) => this.createShortcut(payload.packName),
     )
-  }
-
-  // ── IPC: launch:upload-crash ───────────────────────────────────────────────
-
-  private handleLaunchUploadCrash(): void {
-    ipcMain.handle(
+    secureHandle(
       IpcChannels.LAUNCH_UPLOAD_CRASH,
-      async (_event, payload: { packName: string }): Promise<string> => {
-        const instanceDir = await this.resolveInstanceDir(payload.packName)
-        const crashDir = path.join(instanceDir, 'crash-reports')
-
-        // List .txt files in crash-reports, pick the most recently modified one.
-        let entries: { name: string; mtime: number }[] = []
-        try {
-          const dirEntries = await fs.readdir(crashDir)
-          const stats = await Promise.all(
-            dirEntries
-              .filter((f) => f.endsWith('.txt'))
-              .map(async (f) => {
-                const stat = await fs.stat(path.join(crashDir, f))
-                return { name: f, mtime: stat.mtimeMs }
-              }),
-          )
-          entries = stats
-        } catch (err) {
-          throw new Error(
-            `Could not read crash-reports directory for "${payload.packName}": ${
-              err instanceof Error ? err.message : String(err)
-            }`,
-          )
-        }
-
-        if (entries.length === 0) {
-          throw new Error(`No crash reports found for "${payload.packName}"`)
-        }
-
-        // Sort descending by mtime and pick the newest
-        entries.sort((a, b) => b.mtime - a.mtime)
-        const latestFile = path.join(crashDir, entries[0].name)
-
-        let crashText: string
-        try {
-          crashText = await fs.readFile(latestFile, 'utf8')
-        } catch (err) {
-          throw new Error(
-            `Failed to read crash report "${entries[0].name}": ${
-              err instanceof Error ? err.message : String(err)
-            }`,
-          )
-        }
-
-        const url = await uploadToPaste(crashText)
-        logger.info(`[LaunchService] Crash report uploaded: ${url}`)
-        return url
+      { validate: this.packPayload },
+      (_event, payload) => this.uploadCrash(payload.packName),
+    )
+    secureHandle(
+      IpcChannels.LAUNCH_UPLOAD_LOG,
+      {
+        roles: ['launcher', 'console'],
+        validate: (value) => ({ sessionId: assertSessionId(requireObject(value).sessionId) }),
+      },
+      async (_event, { sessionId }) => {
+        const log = this.getLog(sessionId)
+        if (!log) throw new IpcError('NOT_FOUND', 'Für diese Sitzung ist kein Log verfügbar.')
+        return uploadToPaste(log)
       },
     )
   }
 
-  // ── IPC: launch:upload-log ─────────────────────────────────────────────────
+  private readonly packPayload = (value: unknown): { packName: string } => ({
+    packName: assertPackName(requireObject(value).packName),
+  })
 
-  private handleLaunchUploadLog(): void {
-    ipcMain.handle(IpcChannels.LAUNCH_UPLOAD_LOG, async (): Promise<string> => {
-      const logText = this.logBuffer.getText()
-      if (!logText) {
-        throw new Error('Log buffer is empty')
+  isPackActive(packName: string): boolean {
+    return packOperationService.isRunning(packName)
+  }
+
+  hasActiveSessions(): boolean {
+    return [...this.sessions.values()].some(({ data }) => data.state === 'launching' || data.state === 'running')
+  }
+
+  private reserve(packName: string): InternalLaunchSession {
+    this.pruneInactiveSessions()
+    const now = Date.now()
+    const id = randomUUID()
+    try {
+      packOperationService.reserveLaunch(packName, `launch:${id}`)
+    } catch (error) {
+      if (error instanceof PackOperationConflictError) throw new IpcError('CONFLICT', error.message)
+      throw error
+    }
+    const session: InternalLaunchSession = {
+      data: {
+        id,
+        packName,
+        packTitle: packName,
+        state: 'launching',
+        startedAt: now,
+        updatedAt: now,
+      },
+      preparationAbort: new AbortController(),
+      readers: [],
+      log: new CircularLineBuffer(Constants.logMaxLines),
+    }
+    this.sessions.set(id, session)
+    this.publishState(session)
+    return session
+  }
+
+  private async start(packName: string): Promise<LaunchSession> {
+    if (configService.isStorageMigrationActive()) {
+      throw new IpcError('CONFLICT', 'Während der Datenmigration kann Minecraft nicht gestartet werden.')
+    }
+    const session = this.reserve(packName)
+    const signal = session.preparationAbort!.signal
+    let spawned = false
+    try {
+      signal.throwIfAborted()
+      const profile = await getSelectedProfile()
+      signal.throwIfAborted()
+      let manifest = await installService.getManifestByName(packName)
+      if (!manifest) throw new IpcError('NOT_FOUND', `„${packName}“ ist nicht installiert.`)
+      session.data.packTitle = manifest.title
+      this.publishState(session)
+
+      const remote = await fetchRemoteReference(packName)
+      signal.throwIfAborted()
+      if (remote && remote.version !== manifest.version) {
+        const result = await installService.installModpack(remote, undefined, `launch:${session.data.id}`)
+        signal.throwIfAborted()
+        if (result.success) manifest = await installService.getManifestByName(packName) ?? manifest
+        else logger.warn(`[LaunchService] Auto-update failed; keeping valid local manifest for ${packName}`)
       }
-      const url = await uploadToPaste(logText)
-      logger.info(`[LaunchService] Log uploaded: ${url}`)
-      return url
+
+      const instanceDir = await this.resolveInstanceDir(packName, false)
+      signal.throwIfAborted()
+      const config = configService.get()
+      const override = config.packConfigs[packName] ?? {}
+      const minMemory = override.minMemory ?? config.minMemory
+      const maxMemory = override.maxMemory ?? config.maxMemory
+      const jvmArgs = override.jvmArgs ?? config.jvmArgs
+      const extraJVMArgs = jvmArgs.trim() ? jvmArgs.trim().split(/\s+/) : []
+      if (manifest.launch) {
+        const key = process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'osx' : 'linux'
+        const remoteArgs = manifest.launch[key] ?? manifest.launch.flags ?? []
+        const filtered = filterSafeRemoteJvmArgs(remoteArgs)
+        if (filtered.length !== remoteArgs.length) logger.warn(`[LaunchService] Blocked unsafe remote JVM arguments for ${packName}`)
+        extraJVMArgs.push(...filtered)
+      }
+      const javaPath = await resolveJavaPath(manifest)
+      const launchOptions = {
+        gamePath: instanceDir,
+        resourcePath: configService.getResourceDir(),
+        version: manifest.versionManifest.id,
+        accessToken: profile.minecraftAccessToken,
+        gameProfile: { id: profile.uuid.replace(/-/g, ''), name: profile.lastKnownUsername },
+        userType: 'msa' as unknown as 'mojang',
+        minMemory,
+        maxMemory,
+        extraJVMArgs,
+        resolution: { width: config.gameWidth, height: config.gameHeight },
+        javaPath,
+        launcherName: 'MyFTBLauncher',
+        launcherBrand: 'MyFTBLauncher',
+        extraExecOption: { detached: true, env: buildChildEnv() },
+      }
+
+      // Deliberately do not log generated arguments: they contain access tokens.
+      const child = await xmclLaunch(launchOptions)
+      spawned = true
+      session.child = child
+      session.preparationAbort = undefined
+      session.data.pid = child.pid
+      session.data.state = 'running'
+      this.attachOutput(session, child.stdout)
+      this.attachOutput(session, child.stderr)
+      child.once('close', (exitCode) => this.handleExit(session.data.id, exitCode ?? -1))
+      if (child.exitCode !== null) {
+        this.handleExit(session.data.id, child.exitCode)
+        throw new IpcError('INTERNAL', 'Minecraft wurde direkt nach dem Start beendet.')
+      }
+      if (signal.aborted) {
+        child.kill()
+        throw signal.reason ?? new DOMException('Start abgebrochen', 'AbortError')
+      }
+      if (!child.pid) {
+        child.kill('SIGKILL')
+        throw new IpcError('INTERNAL', 'Für den Minecraft-Prozess wurde keine Prozess-ID zurückgegeben.')
+      }
+      session.data.processIdentity = await getProcessIdentityWithRetry(child.pid) ?? undefined
+      if (!session.data.processIdentity) {
+        child.kill('SIGKILL')
+        throw new IpcError(
+          'IO_ERROR',
+          'Die Minecraft-Prozessidentität konnte nicht sicher ermittelt werden. Der Start wurde abgebrochen.',
+        )
+      }
+      if (session.data.state !== 'running') {
+        throw new IpcError('INTERNAL', 'Minecraft wurde während der Startvorbereitung beendet.')
+      }
+      session.data.updatedAt = Date.now()
+      this.publishState(session)
+      await this.persistRegistry().catch((error: unknown) => {
+        logger.warn('[LaunchService] Running session could not be persisted safely:', error)
+      })
+      discordService.setPlaying(session.data.id, manifest.title, session.data.startedAt)
+
+      configService.merge({
+        lastPlayedPacks: [
+          packName,
+          ...config.lastPlayedPacks.filter((entry) => entry !== packName),
+        ].slice(0, Constants.recentPacksMax),
+      })
+      void configService.save().catch((error: unknown) => {
+        logger.warn('[LaunchService] Recent-pack update could not be saved:', error)
+      })
+      logger.info(`[LaunchService] Started ${packName} (session ${session.data.id}, PID ${child.pid ?? 'unknown'})`)
+      return cloneSession(session.data)
+    } catch (error) {
+      const cancelled = error instanceof Error && error.name === 'AbortError'
+      session.preparationAbort = undefined
+      if (spawned) throw error
+      session.data.state = cancelled ? 'closed' : 'crashed'
+      session.data.exitCode = cancelled ? 0 : -1
+      session.data.error = cancelled ? 'Der Start wurde abgebrochen.' : error instanceof Error ? error.message : 'Der Start ist fehlgeschlagen.'
+      session.data.updatedAt = Date.now()
+      packOperationService.releaseLaunch(packName, `launch:${session.data.id}`)
+      const failureLine = cancelled
+        ? 'Der Minecraft-Start wurde abgebrochen.'
+        : 'Der Minecraft-Start ist vor dem Prozessstart fehlgeschlagen. Details stehen im Launcher-Log.'
+      session.log.push(failureLine)
+      sendToTrustedWindows(IpcChannels.LAUNCH_LOG, {
+        sessionId: session.data.id,
+        packName,
+        line: failureLine,
+      } satisfies LaunchLogEvent)
+      this.publishState(session)
+      await this.persistRegistry()
+      throw error
+    }
+  }
+
+  private attachOutput(session: InternalLaunchSession, stream: NodeJS.ReadableStream | null): void {
+    if (!stream) return
+    const parser = new Log4jParser()
+    const reader = createInterface({ input: stream, crlfDelay: Infinity })
+    session.readers.push(reader)
+    reader.on('line', (rawLine) => {
+      for (const line of parser.feed(rawLine)) {
+        session.log.push(line)
+        const event: LaunchLogEvent = {
+          sessionId: session.data.id,
+          packName: session.data.packName,
+          line,
+        }
+        sendToTrustedWindows(IpcChannels.LAUNCH_LOG, event)
+      }
     })
   }
 
-  // ── Private helpers ────────────────────────────────────────────────────────
+  private handleExit(sessionId: string, exitCode: number): void {
+    const session = this.sessions.get(sessionId)
+    if (!session || (!session.child && (session.data.state === 'closed' || session.data.state === 'crashed'))) return
+    for (const reader of session.readers) reader.close()
+    session.readers = []
+    session.child = undefined
+    session.preparationAbort = undefined
+    session.data.state = exitCode === 0 ? 'closed' : 'crashed'
+    session.data.exitCode = exitCode
+    session.data.updatedAt = Date.now()
+    session.data.detached = false
+    packOperationService.releaseLaunch(session.data.packName, `launch:${sessionId}`)
+    session.log.push(`\nProcess exited with code ${exitCode}`)
+    sendToTrustedWindows(IpcChannels.LAUNCH_LOG, {
+      sessionId,
+      packName: session.data.packName,
+      line: `\nProcess exited with code ${exitCode}`,
+    } satisfies LaunchLogEvent)
+    this.publishState(session)
+    discordService.clearPlaying(sessionId)
+    void this.persistRegistry()
+  }
 
-  /**
-   * Resolves the on-disk instance directory for a named pack.
-   * Matches the path used by install.service: <installDir>/instances/<packName>
-   */
-  private async resolveInstanceDir(packName: string): Promise<string> {
-    const instancesDir = await configService.getSaveSubDir('instances')
-    const resolved = path.resolve(instancesDir, packName)
-    const normalizedBase = path.resolve(instancesDir)
-    if (!resolved.startsWith(normalizedBase + path.sep)) {
-      throw new Error(`Invalid pack name - path traversal detected: "${packName}"`)
+  private publishState(session: InternalLaunchSession): void {
+    session.data.updatedAt = Date.now()
+    sendToTrustedWindows(IpcChannels.LAUNCH_STATE, {
+      session: cloneSession(session.data),
+    } satisfies LaunchStateEvent)
+  }
+
+  private listSessions(): LaunchSession[] {
+    return [...this.sessions.values()]
+      .map((session) => cloneSession(session.data))
+      .sort((a, b) => b.startedAt - a.startedAt)
+  }
+
+  private getLog(sessionId: string): string {
+    const session = this.sessions.get(sessionId)
+    if (!session) throw new IpcError('NOT_FOUND', 'Die Start-Sitzung wurde nicht gefunden.')
+    return session.log.getText()
+  }
+
+  private async kill(sessionId: string): Promise<void> {
+    const session = this.sessions.get(sessionId)
+    if (!session || (session.data.state !== 'running' && session.data.state !== 'launching')) {
+      throw new IpcError('NOT_FOUND', 'Diese Minecraft-Sitzung läuft nicht mehr.')
     }
-    return resolved
+    if (session.data.state === 'launching') session.preparationAbort?.abort(new DOMException('Start abgebrochen', 'AbortError'))
+    if (session.child) {
+      session.child.kill()
+      return
+    }
+    if (session.data.pid) {
+      const pid = session.data.pid
+      const identity = await getProcessIdentity(pid)
+      if (!identity || identity !== session.data.processIdentity) {
+        this.handleExit(sessionId, -1)
+        throw new IpcError('NOT_FOUND', 'Der ursprüngliche Minecraft-Prozess läuft nicht mehr.')
+      }
+      try { process.kill(pid) } catch {
+        throw new IpcError('IO_ERROR', 'Der getrennte Minecraft-Prozess konnte nicht beendet werden.')
+      }
+      void this.reconcileKilledProcess(sessionId, pid)
+    }
+  }
+
+  async detachAll(): Promise<void> {
+    if (this.registryPoll) clearInterval(this.registryPoll)
+    this.registryPoll = null
+    for (const session of this.sessions.values()) {
+      if (!session.child) continue
+      session.data.detached = true
+      session.child.unref()
+      session.child = undefined
+      for (const reader of session.readers) reader.close()
+      session.readers = []
+    }
+    await this.persistRegistry()
+  }
+
+  private async reconcileKilledProcess(sessionId: string, pid: number): Promise<void> {
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 250))
+      const session = this.sessions.get(sessionId)
+      if (!session || session.data.pid !== pid || session.data.state !== 'running') return
+      const identity = await getProcessIdentity(pid)
+      if (!identity || identity !== session.data.processIdentity) {
+        this.handleExit(sessionId, -1)
+        return
+      }
+    }
+
+    const session = this.sessions.get(sessionId)
+    if (!session || session.data.pid !== pid || session.data.state !== 'running') return
+    const identity = await getProcessIdentity(pid)
+    if (!identity || identity !== session.data.processIdentity) {
+      this.handleExit(sessionId, -1)
+      return
+    }
+    try {
+      process.kill(pid, 'SIGKILL')
+      logger.warn(`[LaunchService] Forced termination after graceful timeout for session ${sessionId}`)
+      for (let attempt = 0; attempt < 8; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 250))
+        const currentIdentity = await getProcessIdentity(pid)
+        if (!currentIdentity || currentIdentity !== session.data.processIdentity) {
+          this.handleExit(sessionId, -1)
+          return
+        }
+      }
+      session.data.error = 'Die Beendigung wurde angefordert; der Prozess läuft noch.'
+      this.publishState(session)
+    } catch (error) {
+      session.data.error = 'Der Minecraft-Prozess konnte nicht beendet werden. Bitte versuche es erneut.'
+      this.publishState(session)
+      logger.warn(`[LaunchService] Forced termination failed for session ${sessionId}:`, error)
+    }
+  }
+
+  private async reconcileDetachedProcesses(): Promise<void> {
+    for (const session of this.sessions.values()) {
+      if (!session.data.detached || !session.data.pid || session.data.state !== 'running') continue
+      const identity = await getProcessIdentity(session.data.pid)
+      if (!identity || identity !== session.data.processIdentity) this.handleExit(session.data.id, -1)
+    }
+  }
+
+  private persistRegistry(): Promise<void> {
+    const snapshot = this.listSessions().filter((session) => (
+      session.state === 'running'
+      && typeof session.pid === 'number'
+      && typeof session.processIdentity === 'string'
+    ))
+    const operation = this.persistenceQueue.then(() => atomicWriteFile(
+      this.registryPath,
+      `${JSON.stringify(snapshot, null, 2)}\n`,
+    ))
+    this.persistenceQueue = operation.catch(() => {})
+    return operation
+  }
+
+  private pruneInactiveSessions(): void {
+    const inactive = [...this.sessions.values()]
+      .filter((session) => session.data.state === 'closed' || session.data.state === 'crashed')
+      .sort((left, right) => right.data.updatedAt - left.data.updatedAt)
+    for (const session of inactive.slice(Constants.launchSessionHistoryMax)) {
+      this.sessions.delete(session.data.id)
+      sendToTrustedWindows(IpcChannels.LAUNCH_SESSION_REMOVED, { sessionId: session.data.id })
+    }
+  }
+
+  private async resolveInstanceDir(packName: string, create: boolean): Promise<string> {
+    const directory = await configService.getInstanceDir(packName, create)
+    try {
+      const stat = await fs.lstat(directory)
+      if (stat.isSymbolicLink()) throw new IpcError('INVALID_PAYLOAD', 'Symbolische Instanzpfade sind nicht erlaubt.')
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      if (!create) throw new IpcError('NOT_FOUND', 'Der Instanzordner wurde nicht gefunden.')
+    }
+    return directory
+  }
+
+  private async deletePack(packName: string): Promise<{ success: boolean; error?: string }> {
+    if (configService.isStorageMigrationActive()) {
+      return { success: false, error: 'Während der Datenmigration können Modpacks nicht gelöscht werden.' }
+    }
+    const owner = `delete:${randomUUID()}`
+    try {
+      packOperationService.beginMutation(packName, owner)
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error
+          ? error.message
+          : 'Das Modpack kann gerade nicht gelöscht werden.',
+      }
+    }
+    try {
+      const directory = await this.resolveInstanceDir(packName, false)
+      await fs.rm(directory, { recursive: true, force: true })
+      const config = configService.get()
+      const updates: Partial<LauncherConfig> = {}
+      if (config.packConfigs[packName]) {
+        const { [packName]: _removed, ...remaining } = config.packConfigs
+        updates.packConfigs = remaining
+      }
+      if (config.lastPlayedPacks.includes(packName)) {
+        updates.lastPlayedPacks = config.lastPlayedPacks.filter((entry) => entry !== packName)
+      }
+      if (Object.keys(updates).length) {
+        configService.merge(updates)
+        await configService.save()
+      }
+      return { success: true }
+    } catch (error) {
+      logger.warn(`[LaunchService] Pack deletion failed for ${packName}:`, error)
+      return { success: false, error: 'Das Modpack konnte nicht gelöscht werden.' }
+    } finally {
+      packOperationService.endMutation(packName, owner)
+    }
+  }
+
+  private async createShortcut(packName: string): Promise<void> {
+    const executablePath = app.getPath('exe')
+    const desktopPath = app.getPath('desktop')
+    if (process.platform === 'win32') {
+      const shortcutPath = path.join(desktopPath, `${packName}.lnk`)
+      const instanceDir = await this.resolveInstanceDir(packName, false)
+      let iconPath = executablePath
+      for (const candidate of [path.join(instanceDir, 'pack.ico'), path.join(instanceDir, 'pack.png')]) {
+        try { await fs.access(candidate); iconPath = candidate; break } catch { /* next */ }
+      }
+      if (!shell.writeShortcutLink(shortcutPath, 'create', {
+        target: executablePath,
+        args: `--pack "${packName}"`,
+        icon: iconPath,
+        iconIndex: 0,
+      })) throw new Error('Die Windows-Verknüpfung konnte nicht erstellt werden.')
+    } else if (process.platform === 'linux') {
+      const instanceDir = await this.resolveInstanceDir(packName, false)
+      let icon = executablePath
+      for (const candidate of [path.join(instanceDir, 'pack.png'), path.join(instanceDir, 'pack.svg')]) {
+        try { await fs.access(candidate); icon = candidate; break } catch { /* next */ }
+      }
+      const contents = [
+        '[Desktop Entry]',
+        'Type=Application',
+        'Version=1.0',
+        `Name=MyFTB – ${packName}`,
+        `Exec=${executablePath} --pack "${packName}"`,
+        `Icon=${icon}`,
+        'Terminal=false',
+        'Categories=Game;',
+      ].join('\n')
+      const shortcut = path.join(desktopPath, `${packName}.desktop`)
+      await fs.writeFile(shortcut, contents, { encoding: 'utf8', mode: 0o755 })
+    }
+  }
+
+  private async uploadCrash(packName: string): Promise<string> {
+    const instanceDir = await this.resolveInstanceDir(packName, false)
+    const crashDir = path.join(instanceDir, 'crash-reports')
+    await assertContainedNoLinks(instanceDir, crashDir, { includeLeaf: true, label: 'Absturzberichtspfad' })
+    const crashDirStat = await fs.lstat(crashDir)
+    if (!crashDirStat.isDirectory() || crashDirStat.isSymbolicLink()) {
+      throw new IpcError('INVALID_PAYLOAD', 'Der Absturzberichtspfad ist nicht sicher.')
+    }
+    const entries = await fs.readdir(crashDir, { withFileTypes: true })
+    const candidates = await Promise.all(entries
+      .filter((entry) => entry.isFile() && !entry.isSymbolicLink() && entry.name.endsWith('.txt'))
+      .map(async (entry) => {
+        const filePath = path.join(crashDir, entry.name)
+        const stat = await fs.lstat(filePath)
+        if (!stat.isFile() || stat.isSymbolicLink()) return null
+        return { filePath, mtime: stat.mtimeMs, size: stat.size }
+      }))
+    const latest = candidates
+      .filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null)
+      .sort((a, b) => b.mtime - a.mtime)[0]
+    if (!latest) throw new IpcError('NOT_FOUND', 'Kein Absturzbericht wurde gefunden.')
+    if (latest.size > 10 * 1024 * 1024) throw new IpcError('INVALID_PAYLOAD', 'Der Absturzbericht ist zu groß.')
+    return uploadToPaste(await fs.readFile(latest.filePath, 'utf8'))
   }
 }
-
-// ─── Singleton export ──────────────────────────────────────────────────────────
 
 export const launchService = new LaunchService()
