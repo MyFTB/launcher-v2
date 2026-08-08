@@ -1,9 +1,7 @@
 import path from 'node:path'
 import fs from 'node:fs/promises'
-import { pipeline } from 'node:stream/promises'
-import { Readable } from 'node:stream'
+import crypto, { randomUUID } from 'node:crypto'
 import { setMaxListeners } from 'node:events'
-import { ipcMain } from 'electron'
 
 import {
   install as installMinecraft,
@@ -17,14 +15,18 @@ import {
 import { Version } from '@xmcl/core'
 
 import { xmclDownloadDispatcher } from '../download-agent'
-import { fetchWithRetry, createHashingStream, detectHashAlgorithm } from '../fetch-retry'
+import { fetchWithRetry, detectHashAlgorithm, readJsonResponseLimited } from '../fetch-retry'
+import { downloadFile, DownloadError, normalizeHash } from '../download-manager'
 
 import { IpcChannels } from '../ipc/channels'
+import { IpcError, noPayload, requireObject, secureHandle } from '../ipc/security'
 import { Constants, fmt } from '../constants'
-import { configService } from './config.service'
+import { atomicWriteFile, configService } from './config.service'
 import { getMainWindow } from '../app-state'
+import { packOperationService, PackOperationConflictError } from './pack-operation.service'
 import { ensureRuntime, resolveJavaPath } from './java.service'
 import { logger } from '../logger'
+import { assertContainedNoLinks, assertSafeDownloadDestination } from '../filesystem-safety'
 import type {
   ModpackManifest,
   ModpackManifestReference,
@@ -35,10 +37,20 @@ import type {
   InstallCompleteEvent,
   InstallNeedsFeaturesEvent,
   InstallModpackPayload,
+  InstallResult,
+  DownloadFailure,
   ChangeFeaturesPayload,
   ChangeFeaturesResult,
   PackFeaturesResult,
+  VerifyPackResult,
 } from '../../shared/types'
+import {
+  assertPackName,
+  assertSafeRelativePath,
+  validateModpackManifest,
+  validateModpackReference,
+  ValidationError,
+} from '../../shared/validation'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -119,8 +131,16 @@ async function readSelectedFeatures(
 ): Promise<string[]> {
   const filePath = path.join(instanceDir, SELECTED_FEATURES_FILE)
   try {
-    const raw = await fs.readFile(filePath, 'utf8')
-    return JSON.parse(raw) as string[]
+    const stat = await fs.lstat(filePath)
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 64 * 1024) throw new Error('Invalid feature selection file')
+    const parsed = JSON.parse(await fs.readFile(filePath, 'utf8')) as unknown
+    if (
+      !Array.isArray(parsed)
+      || parsed.length > 200
+      || parsed.some((entry) => typeof entry !== 'string' || entry.length < 1 || entry.length > 128)
+    ) throw new Error('Invalid feature selection')
+    const available = new Set((manifest.features ?? []).map((feature) => feature.name))
+    return [...new Set(parsed as string[])].filter((feature) => available.has(feature))
   } catch {
     // No saved selection — infer from files on disk
   }
@@ -151,7 +171,7 @@ async function writeSelectedFeatures(
   selectedFeatures: string[],
 ): Promise<void> {
   const filePath = path.join(instanceDir, SELECTED_FEATURES_FILE)
-  await fs.writeFile(filePath, JSON.stringify(selectedFeatures, null, 2), 'utf8')
+  await atomicWriteFile(filePath, `${JSON.stringify(selectedFeatures, null, 2)}\n`)
 }
 
 /**
@@ -303,146 +323,866 @@ function pushEvent(channel: string, payload: unknown): void {
   }
 }
 
+class InstallTransactionError extends Error {
+  constructor(readonly failures: DownloadFailure[], message = 'Nicht alle Dateien konnten geladen werden.') {
+    super(message)
+    this.name = 'InstallTransactionError'
+  }
+}
+
+interface StagedTask {
+  task: FileTask
+  stagedPath: string
+  targetPath: string
+}
+
+async function fileMatchesHash(filePath: string, expected: string): Promise<boolean> {
+  try {
+    const stat = await fs.lstat(filePath)
+    if (!stat.isFile() || stat.isSymbolicLink()) return false
+    const hash = crypto.createHash(detectHashAlgorithm(normalizeHash(expected)))
+    const handle = await fs.open(filePath, 'r')
+    try {
+      for await (const chunk of handle.createReadStream()) hash.update(chunk as Buffer)
+    } finally {
+      await handle.close().catch(() => {})
+    }
+    return hash.digest('hex').toLowerCase() === normalizeHash(expected)
+  } catch {
+    return false
+  }
+}
+
+async function assertNoSymlinkEscape(root: string, relativePath: string): Promise<void> {
+  if (!isPathWithinDir(root, relativePath)) throw new ValidationError('Ein Dateipfad verlässt den Instanzordner.')
+  const components = relativePath.replace(/\\/g, '/').split('/').slice(0, -1)
+  let current = path.resolve(root)
+  for (const component of components) {
+    current = path.join(current, component)
+    try {
+      const stat = await fs.lstat(current)
+      if (stat.isSymbolicLink()) throw new ValidationError('Symbolische Links in verwalteten Dateipfaden sind nicht erlaubt.')
+      if (!stat.isDirectory()) throw new ValidationError('Ein verwalteter Elternpfad ist kein Ordner.')
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+      throw error
+    }
+  }
+}
+
+function resolveTaskUrl(task: FileTask): string {
+  return task.location.startsWith('http')
+    ? task.location
+    : fmt(Constants.launcherObjects, task.location)
+}
+
+async function prepareStagingDirectory(instanceDir: string, stagingDir: string): Promise<void> {
+  await assertContainedNoLinks(instanceDir, stagingDir, { includeLeaf: true, label: 'Staging-Pfad' })
+  await recoverStagingTransaction(instanceDir, stagingDir)
+  await fs.mkdir(stagingDir, { recursive: true })
+  await assertContainedNoLinks(instanceDir, stagingDir, { includeLeaf: true, label: 'Staging-Pfad' })
+  const stat = await fs.lstat(stagingDir)
+  if (!stat.isDirectory() || stat.isSymbolicLink()) {
+    throw new ValidationError('Der Staging-Pfad ist kein sicherer Ordner.')
+  }
+  // Verified downloads and their .part metadata may be resumed. A rollback
+  // tree without a valid journal may contain the only intact copy of a file;
+  // preserve it and stop instead of guessing that it is disposable.
+  for (const name of ['rollback', 'rollback-features']) {
+    if (await pathExists(path.join(stagingDir, name))) {
+      throw new ValidationError('Ein unvollständiger Installations-Rollback muss zuerst wiederhergestellt werden.')
+    }
+  }
+}
+
+async function stageTasks(
+  instanceDir: string,
+  stagingDir: string,
+  tasks: FileTask[],
+  signal: AbortSignal,
+  operationId: string,
+  progressChannel: string,
+): Promise<{ staged: StagedTask[]; failures: DownloadFailure[] }> {
+  const staged: StagedTask[] = []
+  const failures: DownloadFailure[] = []
+  let finished = 0
+  let queueIndex = 0
+  const total = tasks.length
+
+  const publish = (currentFile?: string): void => pushEvent(progressChannel, {
+    operationId,
+    total,
+    finished,
+    failed: failures.length,
+    currentFile,
+  } satisfies InstallProgressEvent)
+  publish()
+
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      const index = queueIndex++
+      if (index >= tasks.length) return
+      const task = tasks[index]
+      signal.throwIfAborted()
+      await assertNoSymlinkEscape(instanceDir, task.to)
+      const targetPath = path.resolve(instanceDir, task.to)
+
+      if (task.userFile) {
+        try {
+          await fs.access(targetPath)
+          finished++
+          publish(task.to)
+          continue
+        } catch {
+          // A missing user file can be installed once, but never overwritten.
+        }
+      }
+
+      const stagedPath = path.resolve(stagingDir, 'files', task.to)
+      if (!isPathWithinDir(path.join(stagingDir, 'files'), task.to)) {
+        throw new ValidationError('Ein Staging-Pfad ist ungültig.')
+      }
+      await assertSafeDownloadDestination(instanceDir, stagedPath, 'Download-Stagingpfad')
+      try {
+        if (!await fileMatchesHash(stagedPath, task.hash)) {
+          const url = resolveTaskUrl(task)
+          const external = new URL(url).hostname !== 'packs.myftb.de'
+          await downloadFile({
+            url,
+            target: stagedPath,
+            hash: task.hash,
+            signal,
+            requireStrongHash: external,
+            taskName: task.to,
+          })
+        }
+        staged.push({ task, stagedPath, targetPath })
+        finished++
+      } catch (error) {
+        if (error instanceof Error && error.name === 'AbortError') throw error
+        failures.push(error instanceof DownloadError
+          ? error.failure
+          : {
+              task: task.to,
+              kind: 'unknown',
+              message: formatInstallError(error),
+              retryable: false,
+              attempts: 1,
+            })
+      }
+      publish(task.to)
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(4, tasks.length) }, () => worker()))
+  return { staged, failures }
+}
+
+async function readOptional(filePath: string, maxBytes: number, label: string): Promise<Buffer | null> {
+  try {
+    const stat = await fs.lstat(filePath)
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > maxBytes) {
+      throw new ValidationError(`${label} ist keine sichere reguläre Datei.`)
+    }
+    return await fs.readFile(filePath)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw error
+  }
+}
+
+async function restoreOptional(filePath: string, contents: Buffer | null): Promise<void> {
+  if (contents === null) await fs.rm(filePath, { force: true })
+  else await atomicWriteFile(filePath, contents)
+}
+
+interface InstallTransactionTarget {
+  path: string
+  hadOriginal: boolean
+  newHash: string
+}
+
+interface InstallTransactionJournal {
+  version: 1
+  kind: 'managed' | 'features'
+  marker: 'manifest.json' | typeof SELECTED_FEATURES_FILE
+  newMarkerHash: string
+  newAuxiliaryHash: string | null
+  previousMarkerHash: string | null
+  previousMarkerPresent: boolean
+  previousAuxiliaryPresent: boolean
+  targets: InstallTransactionTarget[]
+  removed: string[]
+}
+
+const TRANSACTION_FILE = '.transaction.json'
+const PREVIOUS_MARKER_FILE = '.transaction.previous-marker'
+const PREVIOUS_AUXILIARY_FILE = '.transaction.previous-auxiliary'
+const MAX_TRANSACTION_JOURNAL_BYTES = 64 * 1024 * 1024
+const MAX_TRANSACTION_BACKUP_BYTES = 50 * 1024 * 1024
+
+function bufferDigest(contents: Buffer | null): string | null {
+  return contents === null ? null : crypto.createHash('sha256').update(contents).digest('hex')
+}
+
+async function fileDigestOrNull(filePath: string): Promise<string | null> {
+  try {
+    const stat = await fs.lstat(filePath)
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 50 * 1024 * 1024) return null
+    return crypto.createHash('sha256').update(await fs.readFile(filePath)).digest('hex')
+  } catch {
+    return null
+  }
+}
+
+async function pathExists(filePath: string): Promise<boolean> {
+  try { await fs.lstat(filePath); return true } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+    throw error
+  }
+}
+
+function parseInstallTransaction(value: unknown): InstallTransactionJournal {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new ValidationError('Das Installationsprotokoll ist ungültig.')
+  }
+  const record = value as Record<string, unknown>
+  const kind = record.kind
+  const marker = record.marker
+  const targets = record.targets
+  const removed = record.removed
+  if (
+    record.version !== 1
+    || (kind !== 'managed' && kind !== 'features')
+    || (marker !== 'manifest.json' && marker !== SELECTED_FEATURES_FILE)
+    || typeof record.newMarkerHash !== 'string'
+    || !/^[0-9a-f]{64}$/i.test(record.newMarkerHash)
+    || (record.newAuxiliaryHash !== null
+      && (typeof record.newAuxiliaryHash !== 'string' || !/^[0-9a-f]{64}$/i.test(record.newAuxiliaryHash)))
+    || (record.previousMarkerHash !== null
+      && (typeof record.previousMarkerHash !== 'string' || !/^[0-9a-f]{64}$/i.test(record.previousMarkerHash)))
+    || typeof record.previousMarkerPresent !== 'boolean'
+    || typeof record.previousAuxiliaryPresent !== 'boolean'
+    || (record.previousMarkerPresent !== (record.previousMarkerHash !== null))
+    || (kind === 'managed' && (marker !== 'manifest.json' || record.newAuxiliaryHash === null))
+    || (kind === 'features' && (marker !== SELECTED_FEATURES_FILE
+      || record.newAuxiliaryHash !== null
+      || record.previousAuxiliaryPresent))
+    || !Array.isArray(targets)
+    || targets.length > 100_000
+    || !Array.isArray(removed)
+    || removed.length > 100_000
+  ) throw new ValidationError('Das Installationsprotokoll ist ungültig.')
+
+  const parsedTargets = targets.map((target) => {
+    if (typeof target !== 'object' || target === null || Array.isArray(target)) {
+      throw new ValidationError('Das Installationsprotokoll enthält ein ungültiges Ziel.')
+    }
+    const item = target as Record<string, unknown>
+    if (
+      typeof item.hadOriginal !== 'boolean'
+      || typeof item.newHash !== 'string'
+      || !/^(?:[0-9a-f]{32}|[0-9a-f]{40}|[0-9a-f]{64}|[0-9a-f]{128})$/i.test(item.newHash)
+    ) {
+      throw new ValidationError('Das Installationsprotokoll enthält ein ungültiges Ziel.')
+    }
+    return {
+      path: assertSafeRelativePath(item.path, 'Transaktionsziel'),
+      hadOriginal: item.hadOriginal,
+      newHash: normalizeHash(item.newHash),
+    }
+  })
+  const parsedRemoved = removed.map((entry) => assertSafeRelativePath(entry, 'Bereinigungsziel'))
+  const pathKey = (entry: string): string => entry.normalize('NFC').toLocaleLowerCase('en-US')
+  const transactionPaths = [
+    ...parsedTargets.map((target) => pathKey(target.path)),
+    ...parsedRemoved.map(pathKey),
+  ]
+  const transactionPathSet = new Set(transactionPaths)
+  if (transactionPathSet.size !== transactionPaths.length) {
+    throw new ValidationError('Das Installationsprotokoll enthält doppelte oder überlappende Pfade.')
+  }
+  for (const entry of transactionPaths) {
+    let separator = entry.indexOf('/')
+    while (separator !== -1) {
+      if (transactionPathSet.has(entry.slice(0, separator))) {
+        throw new ValidationError('Das Installationsprotokoll enthält doppelte oder überlappende Pfade.')
+      }
+      separator = entry.indexOf('/', separator + 1)
+    }
+  }
+  return {
+    version: 1,
+    kind,
+    marker,
+    newMarkerHash: record.newMarkerHash,
+    newAuxiliaryHash: record.newAuxiliaryHash as string | null,
+    previousMarkerHash: record.previousMarkerHash as string | null,
+    previousMarkerPresent: record.previousMarkerPresent,
+    previousAuxiliaryPresent: record.previousAuxiliaryPresent,
+    targets: parsedTargets,
+    removed: parsedRemoved,
+  }
+}
+
+async function beginInstallTransaction(
+  stagingDir: string,
+  journal: InstallTransactionJournal,
+  previousMarker: Buffer | null,
+  previousAuxiliary: Buffer | null,
+): Promise<void> {
+  const markerBackup = path.join(stagingDir, PREVIOUS_MARKER_FILE)
+  const auxiliaryBackup = path.join(stagingDir, PREVIOUS_AUXILIARY_FILE)
+  const validatedJournal = parseInstallTransaction(journal)
+  const serialized = `${JSON.stringify(validatedJournal, null, 2)}\n`
+  if (Buffer.byteLength(serialized) > MAX_TRANSACTION_JOURNAL_BYTES) {
+    throw new ValidationError('Das Installationsprotokoll überschreitet die erlaubte Größe.')
+  }
+  await fs.rm(path.join(stagingDir, TRANSACTION_FILE), { force: true })
+  await restoreOptional(markerBackup, previousMarker)
+  await restoreOptional(auxiliaryBackup, previousAuxiliary)
+  await atomicWriteFile(path.join(stagingDir, TRANSACTION_FILE), serialized)
+}
+
+async function readTransactionBackup(stagingDir: string, name: string): Promise<Buffer> {
+  const backupPath = path.join(stagingDir, name)
+  await assertContainedNoLinks(stagingDir, backupPath, { includeLeaf: true, label: 'Transaktionssicherung' })
+  const stat = await fs.lstat(backupPath)
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_TRANSACTION_BACKUP_BYTES) {
+    throw new ValidationError('Eine Transaktionssicherung ist nicht sicher.')
+  }
+  return fs.readFile(backupPath)
+}
+
+async function recoverStagingTransaction(instanceDir: string, stagingDir: string): Promise<void> {
+  const journalPath = path.join(stagingDir, TRANSACTION_FILE)
+  let journalStat: Awaited<ReturnType<typeof fs.lstat>>
+  try {
+    journalStat = await fs.lstat(journalPath)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+    throw error
+  }
+  if (!journalStat.isFile() || journalStat.isSymbolicLink() || journalStat.size > MAX_TRANSACTION_JOURNAL_BYTES) {
+    throw new ValidationError('Das unterbrochene Installationsprotokoll ist nicht sicher.')
+  }
+  const journal = parseInstallTransaction(JSON.parse(await fs.readFile(journalPath, 'utf8')) as unknown)
+  const markerPath = path.join(instanceDir, journal.marker)
+  const currentMarkerHash = await fileDigestOrNull(markerPath)
+  const currentAuxiliaryHash = journal.kind === 'managed'
+    ? await fileDigestOrNull(path.join(instanceDir, SELECTED_FEATURES_FILE))
+    : null
+  let targetsCommitted = true
+  for (const target of journal.targets) {
+    await assertNoSymlinkEscape(instanceDir, target.path)
+    if (!await fileMatchesHash(path.resolve(instanceDir, target.path), target.newHash)) {
+      targetsCommitted = false
+      break
+    }
+  }
+  let removalsCommitted = true
+  if (targetsCommitted) {
+    for (const relative of journal.removed) {
+      await assertNoSymlinkEscape(instanceDir, relative)
+      if (await pathExists(path.resolve(instanceDir, relative))) {
+        removalsCommitted = false
+        break
+      }
+    }
+  }
+  if (
+    currentMarkerHash === journal.newMarkerHash
+    && currentAuxiliaryHash === journal.newAuxiliaryHash
+    && targetsCommitted
+    && removalsCommitted
+  ) {
+    await fs.rm(stagingDir, { recursive: true, force: true })
+    logger.info(`[InstallService] Completed interrupted ${journal.kind} transaction was finalized`)
+    return
+  }
+
+  const rollbackRoot = path.join(stagingDir, journal.kind === 'managed' ? 'rollback' : 'rollback-features')
+  const replacedRoot = path.join(rollbackRoot, 'replaced')
+  for (const target of journal.targets) {
+    await assertNoSymlinkEscape(instanceDir, target.path)
+    const livePath = path.resolve(instanceDir, target.path)
+    const backupPath = path.resolve(replacedRoot, target.path)
+    await assertContainedNoLinks(stagingDir, backupPath, { includeLeaf: true, label: 'Rollback-Sicherung' })
+    const backupExists = await pathExists(backupPath)
+    const liveExists = await pathExists(livePath)
+    if (backupExists) {
+      const backupStat = await fs.lstat(backupPath)
+      if (!backupStat.isFile() || backupStat.isSymbolicLink()) {
+        throw new ValidationError(`Die Rollback-Sicherung für „${target.path}“ ist keine sichere reguläre Datei.`)
+      }
+      if (liveExists && !await fileMatchesHash(livePath, target.newHash)) {
+        throw new ValidationError(`Die Datei „${target.path}“ wurde nach dem Abbruch verändert; der Rollback wurde angehalten.`)
+      }
+      if (liveExists) await fs.rm(livePath, { force: true })
+      await fs.mkdir(path.dirname(livePath), { recursive: true })
+      await fs.rename(backupPath, livePath)
+    } else if (!target.hadOriginal && liveExists) {
+      if (!await fileMatchesHash(livePath, target.newHash)) {
+        throw new ValidationError(`Die Datei „${target.path}“ wurde nach dem Abbruch verändert; der Rollback wurde angehalten.`)
+      }
+      await fs.rm(livePath, { force: true })
+    }
+  }
+
+  const removedRoot = path.join(rollbackRoot, journal.kind === 'managed' ? 'stale' : 'removed')
+  for (const relative of journal.removed) {
+    await assertNoSymlinkEscape(instanceDir, relative)
+    const backupPath = path.resolve(removedRoot, relative)
+    await assertContainedNoLinks(stagingDir, backupPath, { includeLeaf: true, label: 'Rollback-Sicherung' })
+    if (!await pathExists(backupPath)) continue
+    const backupStat = await fs.lstat(backupPath)
+    if (!backupStat.isFile() || backupStat.isSymbolicLink()) {
+      throw new ValidationError(`Die Rollback-Sicherung für „${relative}“ ist keine sichere reguläre Datei.`)
+    }
+    const livePath = path.resolve(instanceDir, relative)
+    if (await pathExists(livePath)) {
+      throw new ValidationError(`Der Pfad „${relative}“ wurde nach dem Abbruch neu angelegt; der Rollback wurde angehalten.`)
+    }
+    await fs.mkdir(path.dirname(livePath), { recursive: true })
+    await fs.rename(backupPath, livePath)
+  }
+
+  const previousMarker = journal.previousMarkerPresent
+    ? await readTransactionBackup(stagingDir, PREVIOUS_MARKER_FILE)
+    : null
+  await restoreOptional(markerPath, previousMarker)
+  if (journal.kind === 'managed') {
+    const previousFeatures = journal.previousAuxiliaryPresent
+      ? await readTransactionBackup(stagingDir, PREVIOUS_AUXILIARY_FILE)
+      : null
+    await restoreOptional(path.join(instanceDir, SELECTED_FEATURES_FILE), previousFeatures)
+  }
+  await fs.rm(stagingDir, { recursive: true, force: true })
+  logger.warn(`[InstallService] Rolled back interrupted ${journal.kind} transaction`)
+}
+
+const transactionRecoveryFlights = new Map<string, Promise<void>>()
+
+async function performInterruptedTransactionRecovery(instanceDir: string): Promise<void> {
+  const stagingRoot = path.join(instanceDir, '.myftb-staging')
+  let entries: string[]
+  try {
+    const stat = await fs.lstat(stagingRoot)
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      throw new ValidationError('Der Transaktionsordner ist nicht sicher.')
+    }
+    entries = await fs.readdir(stagingRoot)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+    throw error
+  }
+  for (const entry of entries) {
+    const stagingDir = path.join(stagingRoot, entry)
+    const stat = await fs.lstat(stagingDir)
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      throw new ValidationError('Ein Transaktionspfad ist nicht sicher.')
+    }
+    await recoverStagingTransaction(instanceDir, stagingDir)
+  }
+}
+
+/** Recover or finalize interrupted per-instance commits before using the pack. */
+export async function recoverInterruptedTransactions(instanceDir: string): Promise<void> {
+  const key = path.resolve(instanceDir).normalize('NFC').toLocaleLowerCase('en-US')
+  const existing = transactionRecoveryFlights.get(key)
+  if (existing) return existing
+  const operation = performInterruptedTransactionRecovery(instanceDir)
+  transactionRecoveryFlights.set(key, operation)
+  try {
+    await operation
+  } finally {
+    if (transactionRecoveryFlights.get(key) === operation) transactionRecoveryFlights.delete(key)
+  }
+}
+
+async function commitFeatureTransaction(
+  instanceDir: string,
+  stagingDir: string,
+  staged: StagedTask[],
+  toDelete: FileTask[],
+  newSelection: string[],
+): Promise<void> {
+  const rollbackDir = path.join(stagingDir, 'rollback-features')
+  const selectionPath = path.join(instanceDir, SELECTED_FEATURES_FILE)
+  const previousSelection = await readOptional(selectionPath, 64 * 1024, 'Die bisherige Feature-Auswahl')
+  const newSelectionBytes = Buffer.from(`${JSON.stringify(newSelection, null, 2)}\n`)
+  const targets: InstallTransactionTarget[] = []
+  for (const item of staged) {
+    targets.push({
+      path: item.task.to,
+      hadOriginal: await pathExists(item.targetPath),
+      newHash: normalizeHash(item.task.hash),
+    })
+  }
+  const removed = toDelete.filter((task) => !task.userFile).map((task) => task.to)
+  await beginInstallTransaction(stagingDir, {
+    version: 1,
+    kind: 'features',
+    marker: SELECTED_FEATURES_FILE,
+    newMarkerHash: bufferDigest(newSelectionBytes)!,
+    newAuxiliaryHash: null,
+    previousMarkerHash: bufferDigest(previousSelection),
+    previousMarkerPresent: previousSelection !== null,
+    previousAuxiliaryPresent: false,
+    targets,
+    removed,
+  }, previousSelection, null)
+
+  const backups: Array<{ original: string; backup: string }> = []
+  const committed: string[] = []
+  const backup = async (target: string, relative: string): Promise<void> => {
+    let stat: Awaited<ReturnType<typeof fs.lstat>>
+    try {
+      stat = await fs.lstat(target)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+      throw error
+    }
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+      throw new ValidationError('Ein verwaltetes Dateiziel ist keine sichere reguläre Datei.')
+    }
+    const backupPath = path.resolve(rollbackDir, relative)
+    if (!isPathWithinDir(rollbackDir, relative)) throw new ValidationError('Feature-Rollback-Pfad ist ungültig.')
+    await assertContainedNoLinks(instanceDir, backupPath, { includeLeaf: true, label: 'Feature-Rollback-Pfad' })
+    await fs.mkdir(path.dirname(backupPath), { recursive: true })
+    await fs.rename(target, backupPath)
+    backups.push({ original: target, backup: backupPath })
+  }
+  try {
+    for (const item of staged) {
+      await assertNoSymlinkEscape(instanceDir, item.task.to)
+      await fs.mkdir(path.dirname(item.targetPath), { recursive: true })
+      await backup(item.targetPath, path.join('replaced', item.task.to))
+      await fs.rename(item.stagedPath, item.targetPath)
+      committed.push(item.targetPath)
+    }
+    for (const task of toDelete) {
+      if (task.userFile) continue
+      await assertNoSymlinkEscape(instanceDir, task.to)
+      await backup(path.resolve(instanceDir, task.to), path.join('removed', task.to))
+    }
+    // The feature selection is the commit marker and is written last.
+    await atomicWriteFile(selectionPath, newSelectionBytes)
+  } catch (error) {
+    for (const target of committed.reverse()) await fs.rm(target, { force: true }).catch(() => {})
+    for (const item of backups.reverse()) {
+      await fs.mkdir(path.dirname(item.original), { recursive: true }).catch(() => {})
+      await fs.rename(item.backup, item.original).catch(() => {})
+    }
+    await restoreOptional(selectionPath, previousSelection).catch(() => {})
+    throw error
+  }
+  await fs.rm(stagingDir, { recursive: true, force: true }).catch((error) => {
+    logger.warn('[InstallService] Feature transaction committed; deferred staging cleanup:', error)
+  })
+}
+
+async function commitManagedTransaction(
+  instanceDir: string,
+  stagingDir: string,
+  staged: StagedTask[],
+  manifest: ModpackManifest,
+  selectedFeatures: string[],
+  oldManifest: ModpackManifest | null,
+  activeTasks: FileTask[] = manifest.tasks ?? [],
+): Promise<void> {
+  const rollbackDir = path.join(stagingDir, 'rollback')
+  const manifestPath = path.join(instanceDir, 'manifest.json')
+  const featuresPath = path.join(instanceDir, SELECTED_FEATURES_FILE)
+  const previousManifest = await readOptional(manifestPath, 50 * 1024 * 1024, 'Das bisherige Manifest')
+  const previousFeatures = await readOptional(featuresPath, 64 * 1024, 'Die bisherige Feature-Auswahl')
+  const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`)
+  if (manifestBytes.length > 50 * 1024 * 1024) {
+    throw new ValidationError('Das persistierte Modpack-Manifest überschreitet die erlaubte Größe.')
+  }
+  const featuresBytes = Buffer.from(`${JSON.stringify(selectedFeatures, null, 2)}\n`)
+  const pathKey = (entry: string): string => entry.normalize('NFC').toLocaleLowerCase('en-US')
+  const currentPaths = new Set(activeTasks.map((task) => pathKey(task.to)))
+  const staleTasks = (oldManifest?.tasks ?? []).filter(
+    (task) => !task.userFile && !currentPaths.has(pathKey(task.to)),
+  )
+  const targets: InstallTransactionTarget[] = []
+  for (const item of staged) {
+    targets.push({
+      path: item.task.to,
+      hadOriginal: await pathExists(item.targetPath),
+      newHash: normalizeHash(item.task.hash),
+    })
+  }
+  await beginInstallTransaction(stagingDir, {
+    version: 1,
+    kind: 'managed',
+    marker: 'manifest.json',
+    newMarkerHash: bufferDigest(manifestBytes)!,
+    newAuxiliaryHash: bufferDigest(featuresBytes),
+    previousMarkerHash: bufferDigest(previousManifest),
+    previousMarkerPresent: previousManifest !== null,
+    previousAuxiliaryPresent: previousFeatures !== null,
+    targets,
+    removed: staleTasks.map((task) => task.to),
+  }, previousManifest, previousFeatures)
+
+  const backups: Array<{ original: string; backup: string }> = []
+  const committed: string[] = []
+  const backupExisting = async (target: string, relative: string): Promise<void> => {
+    let stat: Awaited<ReturnType<typeof fs.lstat>>
+    try {
+      stat = await fs.lstat(target)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+      throw error
+    }
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+      throw new ValidationError('Ein verwaltetes Dateiziel ist keine sichere reguläre Datei.')
+    }
+    const backup = path.resolve(rollbackDir, relative)
+    if (!isPathWithinDir(rollbackDir, relative)) throw new ValidationError('Rollback-Pfad ist ungültig.')
+    await assertContainedNoLinks(instanceDir, backup, { includeLeaf: true, label: 'Rollback-Pfad' })
+    await fs.mkdir(path.dirname(backup), { recursive: true })
+    await fs.rename(target, backup)
+    backups.push({ original: target, backup })
+  }
+
+  try {
+    for (const item of staged) {
+      await assertNoSymlinkEscape(instanceDir, item.task.to)
+      await fs.mkdir(path.dirname(item.targetPath), { recursive: true })
+      await backupExisting(item.targetPath, path.join('replaced', item.task.to))
+      await fs.rename(item.stagedPath, item.targetPath)
+      committed.push(item.targetPath)
+    }
+
+    for (const oldTask of staleTasks) {
+      if (!isPathWithinDir(instanceDir, oldTask.to)) {
+        throw new ValidationError('Das alte Manifest enthält einen unsicheren Bereinigungspfad.')
+      }
+      await assertNoSymlinkEscape(instanceDir, oldTask.to)
+      await backupExisting(path.resolve(instanceDir, oldTask.to), path.join('stale', oldTask.to))
+    }
+
+    await atomicWriteFile(featuresPath, featuresBytes)
+    // The manifest is the commit marker and is intentionally written last.
+    await atomicWriteFile(manifestPath, manifestBytes)
+  } catch (error) {
+    for (const target of committed.reverse()) await fs.rm(target, { force: true }).catch(() => {})
+    for (const item of backups.reverse()) {
+      await fs.mkdir(path.dirname(item.original), { recursive: true }).catch(() => {})
+      await fs.rename(item.backup, item.original).catch(() => {})
+    }
+    await restoreOptional(featuresPath, previousFeatures).catch(() => {})
+    await restoreOptional(manifestPath, previousManifest).catch(() => {})
+    throw error
+  }
+  await fs.rm(stagingDir, { recursive: true, force: true }).catch((error) => {
+    logger.warn('[InstallService] Managed transaction committed; deferred staging cleanup:', error)
+  })
+}
+
 // ─── Service ─────────────────────────────────────────────────────────────────
 
 class InstallService {
-  /** AbortController for the currently running install, or null when idle. */
   private currentAbort: AbortController | null = null
+  private currentOperation: Promise<unknown> | null = null
+  private pendingOperations = 0
+  private readonly lastFailed = new Map<string, { reference: ModpackManifestReference; selectedFeatures?: string[] }>()
 
-  // ── Lifecycle ─────────────────────────────────────────────────────────────
+  isBusy(): boolean {
+    return this.pendingOperations > 0 || this.currentAbort !== null || this.currentOperation !== null
+  }
 
   registerHandlers(): void {
-    ipcMain.handle(IpcChannels.INSTALL_MODPACK, (_event, payload: InstallModpackPayload) => {
-      return this.handleInstallModpack(payload)
+    const packPayload = (value: unknown): { packName: string } => ({
+      packName: assertPackName(requireObject(value).packName),
     })
-
-    ipcMain.handle(IpcChannels.INSTALL_CANCEL, () => {
-      this.handleInstallCancel()
-    })
-
-    ipcMain.handle(IpcChannels.INSTALL_GET_INSTALLED, async () => {
+    secureHandle(
+      IpcChannels.INSTALL_MODPACK,
+      {
+        validate: (value): InstallModpackPayload => {
+          const payload = requireObject(value)
+          const selectedFeatures = payload.selectedFeatures === undefined
+            ? undefined
+            : this.validateFeatures(payload.selectedFeatures)
+          return { reference: validateModpackReference(payload.reference), selectedFeatures }
+        },
+      },
+      (_event, payload) => this.installModpack(payload.reference, payload.selectedFeatures),
+    )
+    secureHandle(IpcChannels.INSTALL_CANCEL, { validate: noPayload }, () => this.handleInstallCancel())
+    secureHandle(IpcChannels.INSTALL_GET_INSTALLED, { validate: noPayload }, async () => {
       const packs = await this.getInstalledPacks()
-      return packs.map((p) => ({
-        name: p.name,
-        version: p.version,
-        hasFeatures: Array.isArray(p.features) && p.features.length > 0,
+      return packs.map((pack) => ({
+        name: pack.name,
+        title: pack.title,
+        version: pack.version,
+        location: pack.location,
+        gameVersion: pack.gameVersion,
+        ...(pack.logo ? { logo: pack.logo } : {}),
+        hasFeatures: Array.isArray(pack.features) && pack.features.length > 0,
       }))
     })
-
-    ipcMain.handle(IpcChannels.INSTALL_GET_PACK_FEATURES, async (_event, payload: { packName: string }) => {
-      return this.handleGetPackFeatures(payload.packName)
-    })
-
-    ipcMain.handle(IpcChannels.INSTALL_CHANGE_FEATURES, (_event, payload: ChangeFeaturesPayload) => {
-      return this.handleChangeFeatures(payload)
-    })
+    secureHandle(
+      IpcChannels.INSTALL_GET_PACK_FEATURES,
+      { validate: packPayload },
+      (_event, payload) => this.handleGetPackFeatures(payload.packName),
+    )
+    secureHandle(
+      IpcChannels.INSTALL_CHANGE_FEATURES,
+      {
+        validate: (value): ChangeFeaturesPayload => {
+          const payload = requireObject(value)
+          return {
+            packName: assertPackName(payload.packName),
+            selectedFeatures: this.validateFeatures(payload.selectedFeatures),
+          }
+        },
+      },
+      (_event, payload) => this.handleChangeFeatures(payload),
+    )
+    secureHandle(
+      IpcChannels.INSTALL_VERIFY_PACK,
+      { validate: packPayload },
+      (_event, payload) => this.verifyPack(payload.packName),
+    )
+    secureHandle(
+      IpcChannels.INSTALL_REPAIR_PACK,
+      { validate: packPayload },
+      (_event, payload) => this.repairPack(payload.packName),
+    )
+    secureHandle(
+      IpcChannels.INSTALL_RETRY_FAILED,
+      { validate: packPayload },
+      (_event, payload) => this.retryFailed(payload.packName),
+    )
   }
 
-  // ── IPC handlers ──────────────────────────────────────────────────────────
-
-  private async handleInstallModpack(payload: InstallModpackPayload): Promise<void> {
-    // Busy guard — reject at handler level so the IPC rejection reaches the renderer
-    if (this.currentAbort) {
-      throw new Error('Eine Installation laeuft bereits')
+  private validateFeatures(value: unknown): string[] {
+    if (!Array.isArray(value) || value.length > 200 || value.some((entry) => typeof entry !== 'string' || entry.length > 128)) {
+      throw new ValidationError('Die Feature-Auswahl ist ungültig.')
     }
-
-    const { reference, selectedFeatures } = payload
-
-    // 1. Fetch full manifest
-    const manifestUrl = fmt(Constants.packManifest, reference.location)
-    logger.info(`[InstallService] Install requested: ${reference.name} v${reference.version} (MC ${reference.gameVersion})`)
-    const manifestRes = await fetch(manifestUrl, {
-      signal: AbortSignal.timeout(Constants.connectTimeoutMs),
-    })
-    if (!manifestRes.ok) {
-      throw new Error(`Failed to fetch manifest: ${manifestRes.status} ${manifestRes.statusText}`)
-    }
-    const manifest: ModpackManifest = await manifestRes.json() as ModpackManifest
-
-    // 2. Feature gate — if pack has features and no selection provided, ask renderer
-    if (manifest.features && manifest.features.length > 0 && !selectedFeatures) {
-      logger.info(`[InstallService] Awaiting feature selection for ${manifest.name} (${manifest.features.length} feature(s))`)
-      const event: InstallNeedsFeaturesEvent = { features: manifest.features }
-      pushEvent(IpcChannels.INSTALL_NEEDS_FEATURES, event)
-      return
-    }
-
-    const features = selectedFeatures ?? []
-
-    // 3. Kick off the actual install in the background so the IPC handle returns
-    //    quickly (progress is pushed via events).
-    this.runInstall(manifest, features).catch((err: unknown) => {
-      logger.error('[InstallService] Unhandled install error:', err)
-    })
+    return [...new Set(value as string[])]
   }
 
-  private handleInstallCancel(): void {
-    if (this.currentAbort) {
-      this.currentAbort.abort()
-      this.currentAbort = null
+  private async withPackRead<T>(
+    packName: string,
+    operation: (owner: string) => Promise<T>,
+    owner = `read:${randomUUID()}`,
+  ): Promise<T> {
+    try {
+      packOperationService.beginRead(packName, owner)
+    } catch (error) {
+      if (error instanceof PackOperationConflictError) throw new IpcError('CONFLICT', error.message)
+      throw error
     }
+    try {
+      return await operation(owner)
+    } finally {
+      packOperationService.endRead(packName, owner)
+    }
+  }
+
+  private async handleInstallCancel(): Promise<void> {
+    const operation = this.currentOperation
+    this.currentAbort?.abort()
+    if (operation) await operation.catch(() => {})
   }
 
   private async handleGetPackFeatures(packName: string): Promise<PackFeaturesResult> {
-    const manifest = await this.getManifestByName(packName)
-    if (!manifest) {
-      throw new Error(`Manifest fuer "${packName}" nicht gefunden`)
-    }
-    if (!manifest.features || manifest.features.length === 0) {
-      throw new Error(`Pack "${packName}" hat keine optionalen Features`)
-    }
-    const instancesDir = await configService.getSaveSubDir('instances')
-    const instanceDir = path.join(instancesDir, packName)
-    const selected = await readSelectedFeatures(instanceDir, manifest)
-    return { features: manifest.features, selected }
+    return this.withPackRead(packName, async (owner) => {
+      const manifest = await this.getManifestByName(packName, owner)
+      if (!manifest) {
+        throw new Error(`Manifest fuer "${packName}" nicht gefunden`)
+      }
+      if (!manifest.features || manifest.features.length === 0) {
+        throw new Error(`Pack "${packName}" hat keine optionalen Features`)
+      }
+      const instanceDir = await configService.getInstanceDir(packName, false)
+      const selected = await readSelectedFeatures(instanceDir, manifest)
+      return { features: manifest.features, selected }
+    })
   }
 
-  private async handleChangeFeatures(payload: ChangeFeaturesPayload): Promise<void> {
-    // Busy guard — reject at handler level so the IPC rejection reaches the renderer
-    if (this.currentAbort) {
-      throw new Error('Eine Installation laeuft bereits')
+  private async handleChangeFeatures(payload: ChangeFeaturesPayload): Promise<ChangeFeaturesResult> {
+    if (configService.isStorageMigrationActive()) {
+      throw new IpcError('CONFLICT', 'Während der Datenmigration können Modpacks nicht verändert werden.')
     }
-
-    const { packName, selectedFeatures } = payload
-    logger.info(`[InstallService] Feature change requested for "${packName}" with features: [${selectedFeatures.join(', ')}]`)
-
-    this.runChangeFeatures(packName, selectedFeatures).catch((err: unknown) => {
-      logger.error('[InstallService] Unhandled feature change error:', err)
-    })
+    if (this.currentAbort) throw new IpcError('CONFLICT', 'Eine Installation oder Reparatur läuft bereits.')
+    const owner = `features:${randomUUID()}`
+    try {
+      packOperationService.beginMutation(payload.packName, owner)
+    } catch (error) {
+      if (error instanceof PackOperationConflictError) throw new IpcError('CONFLICT', error.message)
+      throw error
+    }
+    const operation = this.runChangeFeatures(payload.packName, payload.selectedFeatures, owner)
+    this.currentOperation = operation
+    try {
+      return await operation
+    } finally {
+      packOperationService.endMutation(payload.packName, owner)
+      if (this.currentOperation === operation) this.currentOperation = null
+    }
   }
 
   // ── Install flow ──────────────────────────────────────────────────────────
 
-  private async runInstall(manifest: ModpackManifest, selectedFeatures: string[]): Promise<void> {
-    // Defensive: callers must check the busy guard, but abort a stale controller if one slipped through
-    if (this.currentAbort) {
-      this.currentAbort.abort()
+  private async runInstall(
+    manifest: ModpackManifest,
+    selectedFeatures: string[],
+    owner = `install:${randomUUID()}`,
+  ): Promise<InstallResult> {
+    if (this.currentAbort) throw new IpcError('CONFLICT', 'Eine Installation oder Reparatur läuft bereits.')
+    try {
+      packOperationService.beginMutation(manifest.name, owner)
+    } catch (error) {
+      if (error instanceof PackOperationConflictError) throw new IpcError('CONFLICT', error.message)
+      throw error
     }
+
     const abort = new AbortController()
     setMaxListeners(0, abort.signal)
     this.currentAbort = abort
-    const { signal } = abort
-
-    const featuresStr = selectedFeatures.length > 0 ? selectedFeatures.join(', ') : 'none'
-    logger.info(`[InstallService] Starting install: ${manifest.name} v${manifest.version} | MC ${manifest.gameVersion} | features: [${featuresStr}]`)
-
+    const operationId = randomUUID()
+    const operation = (async (): Promise<InstallResult> => {
+      try {
+        await this.doInstall(manifest, selectedFeatures, abort.signal, operationId)
+        return { success: true, packName: manifest.name, operationId, failures: [] }
+      } catch (error) {
+        if (error instanceof Error && error.name === 'AbortError') {
+          return {
+            success: false,
+            packName: manifest.name,
+            operationId,
+            failures: [],
+            cancelled: true,
+            error: 'Installation abgebrochen',
+          }
+        }
+        const failures = error instanceof InstallTransactionError ? error.failures : []
+        return {
+          success: false,
+          packName: manifest.name,
+          operationId,
+          failures,
+          error: formatInstallError(error),
+        }
+      }
+    })()
+    this.currentOperation = operation
     try {
-      await this.doInstall(manifest, selectedFeatures, signal)
-      logger.info(`[InstallService] Install complete: ${manifest.name} v${manifest.version}`)
-    } catch (err: unknown) {
-      if ((err as Error).name === 'AbortError') {
-        logger.info(`[InstallService] Install cancelled: ${manifest.name}`)
-        const complete: InstallCompleteEvent = { success: false, error: 'Installation abgebrochen' }
-        pushEvent(IpcChannels.INSTALL_COMPLETE, complete)
-      } else {
-        logger.error('[InstallService] Install failed:', err)
-        const complete: InstallCompleteEvent = { success: false, error: formatInstallError(err) }
-        pushEvent(IpcChannels.INSTALL_COMPLETE, complete)
-      }
+      const result = await operation
+      pushEvent(IpcChannels.INSTALL_COMPLETE, result satisfies InstallCompleteEvent)
+      if (result.success) logger.info(`[InstallService] Install complete: ${manifest.name} v${manifest.version}`)
+      else logger.warn(`[InstallService] Install failed for ${manifest.name}: ${result.error ?? 'unknown error'}`)
+      return result
     } finally {
-      if (this.currentAbort === abort) {
-        this.currentAbort = null
-      }
+      packOperationService.endMutation(manifest.name, owner)
+      if (this.currentAbort === abort) this.currentAbort = null
+      if (this.currentOperation === operation) this.currentOperation = null
     }
   }
 
@@ -450,11 +1190,11 @@ class InstallService {
     manifest: ModpackManifest,
     selectedFeatures: string[],
     signal: AbortSignal,
+    operationId: string,
   ): Promise<void> {
     // ── a. Prepare instance directory ────────────────────────────────────────
-    const instancesDir = await configService.getSaveSubDir('instances')
-    const instanceDir = path.join(instancesDir, manifest.name)
-    await fs.mkdir(instanceDir, { recursive: true })
+    const instanceDir = await configService.getInstanceDir(manifest.name, true)
+    await recoverInterruptedTransactions(instanceDir)
 
     // ── b. Detect mod loader ─────────────────────────────────────────────────
     const { loader, libraryName } = detectModLoader(manifest)
@@ -615,182 +1355,70 @@ class InstallService {
 
     signal.throwIfAborted()
 
-    // ── f. Download modpack file tasks ────────────────────────────────────────
-    const tasks = (manifest.tasks ?? []).filter((task) =>
-      evaluateCondition(task.when, selectedFeatures),
-    )
-
-    const total = tasks.length
-    let finished = 0
-    let failed = 0
-
-    logger.info(`[InstallService] Downloading ${total} modpack file(s)...`)
-
-    // Also read old manifest to clean up removed files
-    const manifestFilePath = path.join(instanceDir, 'manifest.json')
+    // ── f. Stage, verify, and atomically commit managed pack files ────────────
+    const tasks = (manifest.tasks ?? []).filter((task) => evaluateCondition(task.when, selectedFeatures))
+    const manifestPath = path.join(instanceDir, 'manifest.json')
     let oldManifest: ModpackManifest | null = null
     try {
-      const raw = await fs.readFile(manifestFilePath, 'utf8')
-      oldManifest = JSON.parse(raw) as ModpackManifest
+      const stat = await fs.lstat(manifestPath)
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 50 * 1024 * 1024) {
+        throw new ValidationError('Das alte Manifest ist kein sicheres Dateiziel.')
+      }
+      oldManifest = validateModpackManifest(JSON.parse(await fs.readFile(manifestPath, 'utf8')) as unknown)
     } catch {
-      // No previous manifest — first install
+      // Missing/invalid manifests are never used as a cleanup authority.
     }
 
-    const isUpdate = oldManifest !== null
-    logger.info(
-      `[InstallService] ${isUpdate ? `Updating ${manifest.name} (${oldManifest!.version} -> ${manifest.version})` : `First install of ${manifest.name} v${manifest.version}`} - ${tasks.length} file(s)`,
+    const transactionKey = crypto
+      .createHash('sha256')
+      .update(`${manifest.name}\0${manifest.version}\0${selectedFeatures.slice().sort().join('\0')}`)
+      .digest('hex')
+      .slice(0, 24)
+    const stagingDir = path.join(instanceDir, '.myftb-staging', transactionKey)
+    await prepareStagingDirectory(instanceDir, stagingDir)
+    const { staged, failures } = await stageTasks(
+      instanceDir,
+      stagingDir,
+      tasks,
+      signal,
+      operationId,
+      IpcChannels.INSTALL_PROGRESS,
     )
-
-    pushEvent(IpcChannels.INSTALL_PROGRESS, {
-      total,
-      finished,
-      failed,
-      currentFile: undefined,
-    } satisfies InstallProgressEvent)
-
-    // Download concurrently with a small concurrency cap
-    const CONCURRENCY = 8
-    let queueIndex = 0
-
-    const downloadWorker = async (): Promise<void> => {
-      while (queueIndex < tasks.length) {
-        const task = tasks[queueIndex++]
-
-        signal.throwIfAborted()
-
-        const url = task.location.startsWith('http')
-          ? task.location
-          : fmt(Constants.launcherObjects, task.location)
-
-        const targetPath = path.resolve(instanceDir, task.to)
-
-        if (!isPathWithinDir(instanceDir, task.to)) {
-          throw new Error(`Pack manifest contains unsafe file path: ${task.to}`)
-        }
-
-        // Skip user files that already exist on disk
-        if (task.userFile) {
-          try {
-            await fs.access(targetPath)
-            finished++
-            pushEvent(IpcChannels.INSTALL_PROGRESS, {
-              total,
-              finished,
-              failed,
-              currentFile: task.to,
-            } satisfies InstallProgressEvent)
-            continue
-          } catch {
-            // File does not exist — fall through and download it
-          }
-        }
-
-        try {
-          await fs.mkdir(path.dirname(targetPath), { recursive: true })
-          const res = await fetchWithRetry(url, { signal })
-          if (!res.ok) {
-            throw new Error(`HTTP ${res.status} ${res.statusText} for ${url}`)
-          }
-          const { stream: hasher, digest } = createHashingStream(detectHashAlgorithm(task.hash))
-          const fileHandle = await fs.open(targetPath, 'w')
-          try {
-            await pipeline(
-              Readable.fromWeb(res.body as import('node:stream/web').ReadableStream),
-              hasher,
-              fileHandle.createWriteStream(),
-            )
-          } finally {
-            await fileHandle.close()
-          }
-          if (task.hash) {
-            const actualHash = digest()
-            if (actualHash !== task.hash) {
-              await fs.unlink(targetPath).catch(() => {})
-              throw new Error(`Hash mismatch for ${task.to}: expected ${task.hash}, got ${actualHash}`)
-            }
-          }
-          finished++
-        } catch (err: unknown) {
-          if ((err as Error).name === 'AbortError') throw err
-          logger.warn(`[InstallService] Failed to download ${url}:`, err)
-          failed++
-        }
-
-        pushEvent(IpcChannels.INSTALL_PROGRESS, {
-          total,
-          finished,
-          failed,
-          currentFile: task.to,
-        } satisfies InstallProgressEvent)
-      }
-    }
-
-    const workers: Promise<void>[] = []
-    for (let i = 0; i < Math.min(CONCURRENCY, tasks.length); i++) {
-      workers.push(downloadWorker())
-    }
-    await Promise.all(workers)
-
-    logger.info(`[InstallService] File downloads done: ${finished}/${total} succeeded, ${failed} failed`)
-
     signal.throwIfAborted()
-
-    // Remove files from old manifest that are no longer present in the current one.
-    // When selectedFeatures is empty (auto-update), skip old tasks that have a
-    // feature condition to avoid deleting the user's previously selected feature files.
-    if (oldManifest?.tasks) {
-      const currentToPaths = new Set(tasks.map((t) => t.to))
-      const isAutoUpdate = selectedFeatures.length === 0
-      let staleCount = 0
-      for (const oldTask of oldManifest.tasks) {
-        if (isAutoUpdate && oldTask.when) continue
-        if (!currentToPaths.has(oldTask.to)) {
-          const stale = path.join(instanceDir, oldTask.to)
-          await fs.unlink(stale).catch(() => {
-            // Ignore — file may already be gone
-          })
-          staleCount++
-        }
-      }
-      if (staleCount > 0) {
-        logger.info(`[InstallService] Removed ${staleCount} stale file(s) from previous version`)
-      }
+    if (failures.length > 0) {
+      // Keep safe partial files and metadata so Retry can resume them.
+      throw new InstallTransactionError(failures)
     }
-
-    // ── f. Save manifest ──────────────────────────────────────────────────────
-    // CodeQL[js/http-to-file-access]: pack manifest from trusted packs.myftb.de, intentionally persisted to track installed state
-    await fs.writeFile(manifestFilePath, JSON.stringify(manifest, null, 2), 'utf8')
-
-    // Persist user's feature selection for post-install reconfiguration
-    await writeSelectedFeatures(instanceDir, selectedFeatures)
-
+    await commitManagedTransaction(
+      instanceDir,
+      stagingDir,
+      staged,
+      manifest,
+      selectedFeatures,
+      oldManifest,
+      tasks,
+    )
     signal.throwIfAborted()
-
-    // ── Complete ──────────────────────────────────────────────────────────────
-    const success = failed === 0
-    const complete: InstallCompleteEvent = { success, error: success ? undefined : `${failed} Datei(en) konnten nicht heruntergeladen werden` }
-    pushEvent(IpcChannels.INSTALL_COMPLETE, complete)
   }
 
   // ── Feature change flow ──────────────────────────────────────────────────
 
-  private async runChangeFeatures(packName: string, newSelection: string[]): Promise<void> {
+  private async runChangeFeatures(packName: string, newSelection: string[], owner: string): Promise<ChangeFeaturesResult> {
     const abort = new AbortController()
     setMaxListeners(0, abort.signal)
     this.currentAbort = abort
     const { signal } = abort
 
     try {
-      // 1. Read manifest
-      const manifest = await this.getManifestByName(packName)
+      // 1. Recover any interrupted commit, then read the installed manifest.
+      const instanceDir = await configService.getInstanceDir(packName, false)
+      await recoverInterruptedTransactions(instanceDir)
+      const manifest = await this.getManifestByName(packName, owner)
       if (!manifest) {
         const result: ChangeFeaturesResult = { success: false, error: `Manifest fuer "${packName}" nicht gefunden` }
         pushEvent(IpcChannels.INSTALL_FEATURES_CHANGE_COMPLETE, result)
-        return
+        return result
       }
-
-      const instancesDir = await configService.getSaveSubDir('instances')
-      const instanceDir = path.join(instancesDir, packName)
 
       // 2. Read old selection
       const oldSelection = await readSelectedFeatures(instanceDir, manifest)
@@ -815,129 +1443,49 @@ class InstallService {
         await writeSelectedFeatures(instanceDir, newSelection)
         const result: ChangeFeaturesResult = { success: true }
         pushEvent(IpcChannels.INSTALL_FEATURES_CHANGE_COMPLETE, result)
-        return
+        return result
       }
 
-      // 4. Download new files
-      const total = toDownload.length + toDelete.length
-      let finished = 0
-      let failed = 0
-
-      pushEvent(IpcChannels.INSTALL_FEATURES_CHANGE_PROGRESS, {
-        total,
-        finished,
-        failed,
-        currentFile: undefined,
-      } satisfies InstallProgressEvent)
-
-      const CONCURRENCY = 8
-      let queueIndex = 0
-
-      const downloadWorker = async (): Promise<void> => {
-        while (queueIndex < toDownload.length) {
-          const task = toDownload[queueIndex++]
-
-          signal.throwIfAborted()
-
-          const url = task.location.startsWith('http')
-            ? task.location
-            : fmt(Constants.launcherObjects, task.location)
-
-          const targetPath = path.resolve(instanceDir, task.to)
-
-          if (!isPathWithinDir(instanceDir, task.to)) {
-            throw new Error(`Pack manifest contains unsafe file path: ${task.to}`)
-          }
-
-          try {
-            await fs.mkdir(path.dirname(targetPath), { recursive: true })
-            const res = await fetchWithRetry(url, { signal })
-            if (!res.ok) {
-              throw new Error(`HTTP ${res.status} ${res.statusText} for ${url}`)
-            }
-            const { stream: hasher, digest } = createHashingStream(detectHashAlgorithm(task.hash))
-            const fileHandle = await fs.open(targetPath, 'w')
-            try {
-              await pipeline(
-                Readable.fromWeb(res.body as import('node:stream/web').ReadableStream),
-                hasher,
-                fileHandle.createWriteStream(),
-              )
-            } finally {
-              await fileHandle.close()
-            }
-            if (task.hash) {
-              const actualHash = digest()
-              if (actualHash !== task.hash) {
-                await fs.unlink(targetPath).catch(() => {})
-                throw new Error(`Hash mismatch for ${task.to}: expected ${task.hash}, got ${actualHash}`)
-              }
-            }
-            finished++
-          } catch (err: unknown) {
-            if ((err as Error).name === 'AbortError') throw err
-            logger.warn(`[InstallService] Feature change: failed to download ${url}:`, err)
-            failed++
-          }
-
-          pushEvent(IpcChannels.INSTALL_FEATURES_CHANGE_PROGRESS, {
-            total,
-            finished,
-            failed,
-            currentFile: task.to,
-          } satisfies InstallProgressEvent)
-        }
-      }
-
-      const workers: Promise<void>[] = []
-      for (let i = 0; i < Math.min(CONCURRENCY, toDownload.length); i++) {
-        workers.push(downloadWorker())
-      }
-      await Promise.all(workers)
-
+      // 4. Stage additions, then commit additions/removals and selection together.
+      const transactionKey = crypto.createHash('sha256')
+        .update(`features\0${packName}\0${newSelection.slice().sort().join('\0')}`)
+        .digest('hex')
+        .slice(0, 24)
+      const stagingDir = path.join(instanceDir, '.myftb-staging', transactionKey)
+      await prepareStagingDirectory(instanceDir, stagingDir)
+      const { staged, failures } = await stageTasks(
+        instanceDir,
+        stagingDir,
+        toDownload,
+        signal,
+        randomUUID(),
+        IpcChannels.INSTALL_FEATURES_CHANGE_PROGRESS,
+      )
       signal.throwIfAborted()
-
-      // 5. Partial-failure check: if any downloads failed, preserve old state
-      if (failed > 0) {
-        logger.warn(`[InstallService] Feature change for "${packName}" had ${failed} failed download(s) - preserving old selection`)
-        await writeSelectedFeatures(instanceDir, oldSelection)
-        const result: ChangeFeaturesResult = { success: false, error: `${failed} Datei(en) konnten nicht heruntergeladen werden` }
-        pushEvent(IpcChannels.INSTALL_FEATURES_CHANGE_COMPLETE, result)
-        return
-      }
-
-      // 6. Delete deselected files (only after all downloads succeeded)
-      for (const task of toDelete) {
-        signal.throwIfAborted()
-        const targetPath = path.resolve(instanceDir, task.to)
-        if (isPathWithinDir(instanceDir, task.to)) {
-          await fs.unlink(targetPath).catch(() => {
-            // File may already be gone
-          })
-          finished++
-          pushEvent(IpcChannels.INSTALL_FEATURES_CHANGE_PROGRESS, {
-            total,
-            finished,
-            failed,
-            currentFile: task.to,
-          } satisfies InstallProgressEvent)
+      if (failures.length > 0) {
+        const result: ChangeFeaturesResult = {
+          success: false,
+          error: `${failures.length} Datei(en) konnten nicht heruntergeladen werden`,
         }
+        pushEvent(IpcChannels.INSTALL_FEATURES_CHANGE_COMPLETE, result)
+        return result
       }
-
-      // 7. Persist new selection
-      await writeSelectedFeatures(instanceDir, newSelection)
+      await commitFeatureTransaction(instanceDir, stagingDir, staged, toDelete, newSelection)
       logger.info(`[InstallService] Feature change complete for "${packName}"`)
       const result: ChangeFeaturesResult = { success: true }
       pushEvent(IpcChannels.INSTALL_FEATURES_CHANGE_COMPLETE, result)
+      return result
     } catch (err: unknown) {
       if ((err as Error).name === 'AbortError') {
         logger.info(`[InstallService] Feature change cancelled for "${packName}"`)
         const result: ChangeFeaturesResult = { success: false, error: 'Vorgang abgebrochen' }
         pushEvent(IpcChannels.INSTALL_FEATURES_CHANGE_COMPLETE, result)
+        return result
       } else {
         logger.error(`[InstallService] Feature change failed for "${packName}":`, err)
         const result: ChangeFeaturesResult = { success: false, error: formatInstallError(err) }
         pushEvent(IpcChannels.INSTALL_FEATURES_CHANGE_COMPLETE, result)
+        return result
       }
     } finally {
       if (this.currentAbort === abort) {
@@ -948,44 +1496,218 @@ class InstallService {
 
   // ── Public install API ────────────────────────────────────────────────────
 
-  /**
-   * Fetch a pack manifest and run the full install, awaiting completion.
-   * Used for silent auto-updates triggered at launch time.
-   * Returns true on success, false on failure.
-   */
-  async installModpack(reference: ModpackManifestReference): Promise<boolean> {
-    // Busy guard — auto-update skips gracefully when another operation is running
+  /** Fetch, validate, install, and return the actual completed result. */
+  async installModpack(
+    referenceInput: ModpackManifestReference,
+    selectedFeatures?: string[],
+    owner?: string,
+  ): Promise<InstallResult> {
+    const reference = validateModpackReference(referenceInput)
+    if (configService.isStorageMigrationActive()) {
+      return {
+        success: false,
+        packName: reference.name,
+        failures: [],
+        error: 'Während der Datenmigration können keine Modpacks installiert werden.',
+      }
+    }
+    this.pendingOperations++
+    try {
+      return await this.installModpackInternal(reference, selectedFeatures, owner)
+    } finally {
+      this.pendingOperations--
+    }
+  }
+
+  private async installModpackInternal(
+    reference: ModpackManifestReference,
+    selectedFeatures?: string[],
+    owner?: string,
+  ): Promise<InstallResult> {
     if (this.currentAbort) {
-      logger.warn(`[InstallService] Auto-update skipped for "${reference.name}" - another install is in progress`)
-      return false
+      return {
+        success: false,
+        packName: reference.name,
+        failures: [],
+        error: 'Eine andere Installation oder Reparatur läuft bereits.',
+      }
     }
 
-    const manifestUrl = fmt(Constants.packManifest, reference.location)
-    logger.info(`[InstallService] Auto-update install started: ${reference.name} v${reference.version}`)
-    let manifestRes: Response
     try {
-      manifestRes = await fetch(manifestUrl, { signal: AbortSignal.timeout(Constants.connectTimeoutMs) })
-    } catch (err) {
-      logger.error(`[InstallService] Auto-update manifest fetch failed for "${reference.name}":`, err)
-      return false
+      const response = await fetchWithRetry(fmt(Constants.packManifest, reference.location), {
+        timeoutMs: Constants.connectTimeoutMs,
+      })
+      if (!response.ok) {
+        return {
+          success: false,
+          packName: reference.name,
+          failures: [],
+          error: `Das Manifest konnte nicht geladen werden (HTTP ${response.status}).`,
+        }
+      }
+      const manifest = validateModpackManifest(await readJsonResponseLimited(response, 50 * 1024 * 1024))
+      if (manifest.name !== reference.name) throw new ValidationError('Manifest und Modpack-Referenz stimmen nicht überein.')
+
+      let features = selectedFeatures
+      if (manifest.features?.length && features === undefined) {
+        const existing = await this.getManifestByName(manifest.name)
+        if (!existing) {
+          pushEvent(IpcChannels.INSTALL_NEEDS_FEATURES, {
+            features: manifest.features,
+          } satisfies InstallNeedsFeaturesEvent)
+          return {
+            success: false,
+            packName: manifest.name,
+            failures: [],
+            error: 'FEATURE_SELECTION_REQUIRED',
+          }
+        }
+        features = await readSelectedFeatures(await configService.getInstanceDir(manifest.name, false), existing)
+      }
+
+      const result = await this.runInstall(manifest, features ?? [], owner)
+      if (!result.success) this.lastFailed.set(manifest.name, { reference, selectedFeatures: features })
+      else this.lastFailed.delete(manifest.name)
+      return result
+    } catch (error) {
+      const result: InstallResult = {
+        success: false,
+        packName: reference.name,
+        failures: error instanceof DownloadError ? [error.failure] : [],
+        error: formatInstallError(error),
+      }
+      this.lastFailed.set(reference.name, { reference, selectedFeatures })
+      return result
     }
-    if (!manifestRes.ok) {
-      logger.error(`[InstallService] Auto-update manifest returned ${manifestRes.status} for "${reference.name}"`)
-      return false
+  }
+
+  async verifyPack(packNameInput: string, owner?: string): Promise<VerifyPackResult> {
+    const packName = assertPackName(packNameInput)
+    return this.withPackRead(packName, async (readOwner) => {
+      const manifest = await this.getManifestByName(packName, readOwner)
+      if (!manifest) throw new IpcError('NOT_FOUND', 'Das installierte Manifest wurde nicht gefunden.')
+      const instanceDir = await configService.getInstanceDir(packName, false)
+      const selected = await readSelectedFeatures(instanceDir, manifest)
+      const missing: string[] = []
+      const corrupt: string[] = []
+      for (const task of (manifest.tasks ?? []).filter((entry) => !entry.userFile && evaluateCondition(entry.when, selected))) {
+        await assertNoSymlinkEscape(instanceDir, task.to)
+        const target = path.resolve(instanceDir, task.to)
+        try {
+          await fs.access(target)
+        } catch {
+          missing.push(task.to)
+          continue
+        }
+        if (!await fileMatchesHash(target, task.hash)) corrupt.push(task.to)
+      }
+      return { packName, valid: missing.length === 0 && corrupt.length === 0, missing, corrupt }
+    }, owner)
+  }
+
+  async repairPack(packNameInput: string): Promise<InstallResult> {
+    const packName = assertPackName(packNameInput)
+    if (configService.isStorageMigrationActive()) {
+      return {
+        success: false,
+        packName,
+        failures: [],
+        error: 'Während einer Speicherort-Migration können Modpacks nicht repariert werden.',
+      }
     }
-    const manifest: ModpackManifest = await manifestRes.json() as ModpackManifest
+    this.pendingOperations++
     try {
-      // Read the user's saved feature selection so auto-update preserves it
-      const instancesDir = await configService.getSaveSubDir('instances')
-      const instanceDir = path.join(instancesDir, manifest.name)
-      const savedFeatures = await readSelectedFeatures(instanceDir, manifest)
-      await this.runInstall(manifest, savedFeatures)
-      logger.info(`[InstallService] Auto-update complete: ${reference.name} v${reference.version}`)
-      return true
-    } catch (err) {
-      logger.error(`[InstallService] Auto-update failed for "${reference.name}":`, err)
-      return false
+      return await this.repairPackInternal(packName)
+    } finally {
+      this.pendingOperations--
     }
+  }
+
+  private async repairPackInternal(packName: string): Promise<InstallResult> {
+    const owner = `repair:${randomUUID()}`
+    try {
+      packOperationService.beginMutation(packName, owner)
+    } catch (error) {
+      return {
+        success: false,
+        packName,
+        failures: [],
+        error: error instanceof Error ? error.message : 'Das Modpack kann gerade nicht repariert werden.',
+      }
+    }
+
+    try {
+      if (this.currentAbort) {
+        return { success: false, packName, failures: [], error: 'Eine andere Installation oder Reparatur läuft bereits.' }
+      }
+      const instanceDir = await configService.getInstanceDir(packName, false)
+      await recoverInterruptedTransactions(instanceDir)
+      const manifest = await this.getManifestByName(packName, owner)
+      if (!manifest) return { success: false, packName, failures: [], error: 'Das installierte Manifest wurde nicht gefunden.' }
+      const verification = await this.verifyPack(packName, owner)
+      if (verification.valid) return { success: true, packName, failures: [] }
+
+      const abort = new AbortController()
+      setMaxListeners(0, abort.signal)
+      this.currentAbort = abort
+      const operationId = randomUUID()
+      const operation = (async (): Promise<InstallResult> => {
+        try {
+          const selected = await readSelectedFeatures(instanceDir, manifest)
+          const invalid = new Set([...verification.missing, ...verification.corrupt])
+          const tasks = (manifest.tasks ?? []).filter((task) => !task.userFile && invalid.has(task.to))
+          const key = crypto.createHash('sha256').update(`repair\0${packName}\0${manifest.version}`).digest('hex').slice(0, 24)
+          const stagingDir = path.join(instanceDir, '.myftb-staging', key)
+          await prepareStagingDirectory(instanceDir, stagingDir)
+          const { staged, failures } = await stageTasks(
+            instanceDir,
+            stagingDir,
+            tasks,
+            abort.signal,
+            operationId,
+            IpcChannels.INSTALL_PROGRESS,
+          )
+          if (failures.length) throw new InstallTransactionError(failures)
+          await commitManagedTransaction(
+            instanceDir,
+            stagingDir,
+            staged,
+            manifest,
+            selected,
+            manifest,
+            manifest.tasks ?? [],
+          )
+          return { success: true, packName, operationId, failures: [] }
+        } catch (error) {
+          return {
+            success: false,
+            packName,
+            operationId,
+            failures: error instanceof InstallTransactionError ? error.failures : [],
+            cancelled: error instanceof Error && error.name === 'AbortError',
+            error: formatInstallError(error),
+          }
+        }
+      })()
+      this.currentOperation = operation
+      try {
+        const result = await operation
+        pushEvent(IpcChannels.INSTALL_COMPLETE, result satisfies InstallCompleteEvent)
+        return result
+      } finally {
+        if (this.currentAbort === abort) this.currentAbort = null
+        if (this.currentOperation === operation) this.currentOperation = null
+      }
+    } finally {
+      packOperationService.endMutation(packName, owner)
+    }
+  }
+
+  async retryFailed(packNameInput: string): Promise<InstallResult> {
+    const packName = assertPackName(packNameInput)
+    const request = this.lastFailed.get(packName)
+    if (!request) return this.repairPack(packName)
+    return this.installModpack(request.reference, request.selectedFeatures)
   }
 
   // ── Public query API ──────────────────────────────────────────────────────
@@ -994,7 +1716,7 @@ class InstallService {
    * Scan the instances directory and return all installed pack manifests.
    */
   async getInstalledPacks(): Promise<ModpackManifest[]> {
-    const instancesDir = await configService.getSaveSubDir('instances')
+    const instancesDir = configService.getInstancesDir()
     let entries: string[]
     try {
       entries = await fs.readdir(instancesDir)
@@ -1004,13 +1726,23 @@ class InstallService {
 
     const manifests: ModpackManifest[] = []
     for (const entry of entries) {
-      const manifestPath = path.join(instancesDir, entry, 'manifest.json')
       try {
-        const raw = await fs.readFile(manifestPath, 'utf8')
-        const parsed = JSON.parse(raw) as ModpackManifest
-        manifests.push(parsed)
+        const packName = assertPackName(entry)
+        await this.withPackRead(packName, async () => {
+          const instanceDir = await configService.getInstanceDir(packName, false)
+          const stat = await fs.lstat(instanceDir)
+          if (stat.isSymbolicLink() || !stat.isDirectory()) return
+          await recoverInterruptedTransactions(instanceDir)
+          const manifestPath = path.join(instanceDir, 'manifest.json')
+          const manifestStat = await fs.lstat(manifestPath)
+          if (!manifestStat.isFile() || manifestStat.isSymbolicLink() || manifestStat.size > 50 * 1024 * 1024) return
+          const parsed = validateModpackManifest(
+            JSON.parse(await fs.readFile(manifestPath, 'utf8')) as unknown,
+          )
+          if (parsed.name === packName) manifests.push(parsed)
+        })
       } catch {
-        // Not a valid instance directory — skip
+        // Busy, incomplete, malformed, or unsafe instance directories are omitted.
       }
     }
 
@@ -1021,12 +1753,22 @@ class InstallService {
    * Read and return the manifest for a specific installed pack by name.
    * Returns `null` when not found or not readable.
    */
-  async getManifestByName(name: string): Promise<ModpackManifest | null> {
-    const instancesDir = await configService.getSaveSubDir('instances')
-    const manifestPath = path.join(instancesDir, name, 'manifest.json')
+  async getManifestByName(name: string, owner?: string): Promise<ModpackManifest | null> {
     try {
-      const raw = await fs.readFile(manifestPath, 'utf8')
-      return JSON.parse(raw) as ModpackManifest
+      const packName = assertPackName(name)
+      return await this.withPackRead(packName, async () => {
+        const instanceDir = await configService.getInstanceDir(packName, false)
+        const stat = await fs.lstat(instanceDir)
+        if (stat.isSymbolicLink() || !stat.isDirectory()) return null
+        await recoverInterruptedTransactions(instanceDir)
+        const manifestPath = path.join(instanceDir, 'manifest.json')
+        const manifestStat = await fs.lstat(manifestPath)
+        if (!manifestStat.isFile() || manifestStat.isSymbolicLink() || manifestStat.size > 50 * 1024 * 1024) return null
+        const manifest = validateModpackManifest(
+          JSON.parse(await fs.readFile(manifestPath, 'utf8')) as unknown,
+        )
+        return manifest.name === packName ? manifest : null
+      }, owner)
     } catch {
       return null
     }
