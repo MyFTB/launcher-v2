@@ -24,7 +24,8 @@ export default defineConfig({
     build: {
       rollupOptions: {
         input: {
-          index: resolve(__dirname, 'src/preload/index.ts')
+          index: resolve(__dirname, 'src/preload/index.ts'),
+          console: resolve(__dirname, 'src/preload/console.ts')
         }
       }
     }
@@ -37,10 +38,6 @@ export default defineConfig({
         '@shared': resolve('src/shared')
       }
     },
-    plugins: [tailwindcss(), react()],
-    define: {
-      // Make process.platform available in renderer (contextIsolation blocks Node's process)
-      'process.platform': JSON.stringify(process.platform)
-    }
+    plugins: [tailwindcss(), react()]
   }
 })

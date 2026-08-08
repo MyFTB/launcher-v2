@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import type {
   ModpackManifestReference,
   InstallProgressEvent,
+  InstallResult,
   Feature,
 } from '@shared/types'
 import ModpackCard from '../components/ModpackCard'
@@ -28,7 +29,8 @@ export default function AvailablePacks() {
   // Installation state
   const [installingPack, setInstallingPack] = useState<ModpackManifestReference | null>(null)
   const [installProgress, setInstallProgress] = useState<InstallProgressEvent | null>(null)
-  const [installResult, setInstallResult] = useState<{ success: boolean; error?: string } | null>(null)
+  const [installResult, setInstallResult] = useState<InstallResult | null>(null)
+  const [resultPack, setResultPack] = useState<ModpackManifestReference | null>(null)
 
   // Feature selection state
   const [pendingFeaturesPack, setPendingFeaturesPack] = useState<ModpackManifestReference | null>(null)
@@ -103,7 +105,9 @@ export default function AvailablePacks() {
       setInstallProgress(args[0] as InstallProgressEvent)
     })
     const unsubComplete = window.electronAPI.on('install:complete', (...args: unknown[]) => {
-      const event = args[0] as { success: boolean; error?: string }
+      const event = args[0] as InstallResult
+      if (!installingPackRef.current || event.packName !== installingPackRef.current.name) return
+      setResultPack(installingPackRef.current)
       if (event.success && installingPackRef.current) {
         window.electronAPI.installGetInstalled()
           .then((infos) => setInstalledNames(new Set(infos.map((p) => p.name))))
@@ -128,40 +132,99 @@ export default function AvailablePacks() {
     }
   }, [])
 
-  const handleInstall = useCallback((pack: ModpackManifestReference) => {
+  const presentInstallResult = useCallback((pack: ModpackManifestReference, result: InstallResult): void => {
+    if (result.error === 'FEATURE_SELECTION_REQUIRED') return
+    setResultPack(pack)
+    setInstallProgress(null)
+    setInstallResult(result)
+    if (result.success) {
+      void window.electronAPI.installGetInstalled()
+        .then((infos) => setInstalledNames(new Set(infos.map((item) => item.name))))
+        .catch(() => {})
+    }
+  }, [])
+
+  const handleInstall = useCallback(async (pack: ModpackManifestReference) => {
     setInstallingPack(pack)
     setInstallProgress(null)
-    window.electronAPI.installModpack(pack).catch((err) => {
+    setInstallResult(null)
+    try {
+      presentInstallResult(pack, await window.electronAPI.installModpack(pack))
+    } catch (err) {
       console.error('Install error', err)
-      setInstallingPack(null)
-      setInstallProgress(null)
-    })
-  }, [])
+      presentInstallResult(pack, {
+        success: false,
+        packName: pack.name,
+        failures: [],
+        error: err instanceof Error ? err.message : 'Installation fehlgeschlagen.',
+      })
+    }
+  }, [presentInstallResult])
 
   const handleCancel = useCallback(() => {
     window.electronAPI.installCancel().catch(console.error)
     setInstallingPack(null)
     setInstallProgress(null)
     setInstallResult(null)
+    setResultPack(null)
   }, [])
 
   const handleDismiss = useCallback(() => {
     setInstallingPack(null)
     setInstallResult(null)
+    setResultPack(null)
   }, [])
 
-  const handleFeatureConfirm = useCallback((selectedFeatures: string[]) => {
+  const handleRetry = useCallback(async () => {
+    if (!resultPack) return
+    setInstallingPack(resultPack)
+    setInstallResult(null)
+    try {
+      presentInstallResult(resultPack, await window.electronAPI.installRetryFailed(resultPack.name))
+    } catch (error) {
+      presentInstallResult(resultPack, {
+        success: false,
+        packName: resultPack.name,
+        failures: [],
+        error: error instanceof Error ? error.message : 'Erneuter Versuch fehlgeschlagen.',
+      })
+    }
+  }, [presentInstallResult, resultPack])
+
+  const handleRepair = useCallback(async () => {
+    if (!resultPack) return
+    setInstallingPack(resultPack)
+    setInstallResult(null)
+    try {
+      presentInstallResult(resultPack, await window.electronAPI.installRepairPack(resultPack.name))
+    } catch (error) {
+      presentInstallResult(resultPack, {
+        success: false,
+        packName: resultPack.name,
+        failures: [],
+        error: error instanceof Error ? error.message : 'Reparatur fehlgeschlagen.',
+      })
+    }
+  }, [presentInstallResult, resultPack])
+
+  const handleFeatureConfirm = useCallback(async (selectedFeatures: string[]) => {
     if (!pendingFeaturesPack) return
     const pack = pendingFeaturesPack
     setPendingFeaturesPack(null)
     setPendingFeatures([])
     setInstallingPack(pack)
-    window.electronAPI.installModpack(pack, selectedFeatures).catch((err) => {
+    try {
+      presentInstallResult(pack, await window.electronAPI.installModpack(pack, selectedFeatures))
+    } catch (err) {
       console.error('Install with features error', err)
-      setInstallingPack(null)
-      setInstallProgress(null)
-    })
-  }, [pendingFeaturesPack])
+      presentInstallResult(pack, {
+        success: false,
+        packName: pack.name,
+        failures: [],
+        error: err instanceof Error ? err.message : 'Installation fehlgeschlagen.',
+      })
+    }
+  }, [pendingFeaturesPack, presentInstallResult])
 
   const handleFeatureCancel = useCallback(() => {
     setPendingFeaturesPack(null)
@@ -288,10 +351,13 @@ export default function AvailablePacks() {
       {(installingPack || installResult) && (
         <ProgressModal
           progress={installProgress}
-          packTitle={installingPack?.title ?? ''}
+          packTitle={installingPack?.title ?? resultPack?.title ?? ''}
           result={installResult}
           onCancel={handleCancel}
           onDismiss={handleDismiss}
+          onRetry={handleRetry}
+          onRepair={handleRepair}
+          onOpenLogs={() => window.electronAPI.configOpenLogs()}
         />
       )}
 

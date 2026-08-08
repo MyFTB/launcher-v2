@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
-import type { ModpackManifestReference, InstallProgressEvent, Feature, ChangeFeaturesResult, PackFeaturesResult } from '@shared/types'
+import type { ModpackManifestReference, InstallProgressEvent, InstallResult, Feature, ChangeFeaturesResult, PackFeaturesResult } from '@shared/types'
 import ModpackCard from '../components/ModpackCard'
 import ContextMenu from '../components/ContextMenu'
 import PackSettingsModal from '../components/PackSettingsModal'
@@ -45,15 +45,23 @@ export default function InstalledPacks() {
     }
   }, [changingFeaturesPack, packs])
 
-  // Launch state lives in the store so it survives tab switches.
-  const launchState = useLaunchStore((s) => s.launchState)
-  const runningPack = useLaunchStore((s) => s.currentPack)
+  // Every pack has independent launch state and logs.
+  const launchSessions = useLaunchStore((s) => s.sessions)
   const storeLaunch = useLaunchStore((s) => s.launch)
+  const activeSessions = useMemo(
+    () => Object.values(launchSessions).filter((session) => session.state === 'running' || session.state === 'launching'),
+    [launchSessions],
+  )
+  const activePackNames = useMemo(
+    () => new Set(activeSessions.map((session) => session.packName)),
+    [activeSessions],
+  )
 
   // Update (install) progress state
   const [updatingPack, setUpdatingPack] = useState<ModpackManifestReference | null>(null)
   const [updateProgress, setUpdateProgress] = useState<InstallProgressEvent | null>(null)
-  const [updateResult, setUpdateResult] = useState<{ success: boolean; error?: string } | null>(null)
+  const [updateResult, setUpdateResult] = useState<InstallResult | null>(null)
+  const [resultPack, setResultPack] = useState<ModpackManifestReference | null>(null)
   const [pendingFeaturesPack, setPendingFeaturesPack] = useState<ModpackManifestReference | null>(null)
   const [pendingFeatures, setPendingFeatures] = useState<Feature[]>([])
   const updatingPackRef = useRef(updatingPack)
@@ -71,12 +79,20 @@ export default function InstalledPacks() {
         window.electronAPI.installGetInstalled(),
       ])
 
-      const installedSet = new Set(installed.map((p) => p.name))
-      const installedVersions = Object.fromEntries(installed.map((p) => [p.name, p.version]))
-      const filtered = remote.filter((p) => installedSet.has(p.name))
+      const remoteByName = new Map(remote.map((pack) => [pack.name, pack]))
+      const filtered: ModpackManifestReference[] = installed.map((local) => ({
+        name: local.name,
+        title: local.title,
+        version: local.version,
+        location: local.location,
+        gameVersion: local.gameVersion,
+        ...(local.logo ? { logo: local.logo } : {}),
+        ...(remoteByName.get(local.name) ?? {}),
+      }))
       const updates: Record<string, boolean> = {}
-      for (const p of filtered) {
-        updates[p.name] = installedVersions[p.name] !== p.version
+      for (const local of installed) {
+        const remotePack = remoteByName.get(local.name)
+        updates[local.name] = !!remotePack && local.version !== remotePack.version
       }
       const features: Record<string, boolean> = {}
       for (const p of installed) {
@@ -103,7 +119,9 @@ export default function InstalledPacks() {
     })
     const unsubComplete = window.electronAPI.on('install:complete', (...args: unknown[]) => {
       if (!updatingPackRef.current) return
-      const event = args[0] as { success: boolean; error?: string }
+      const event = args[0] as InstallResult
+      if (event.packName !== updatingPackRef.current.name) return
+      setResultPack(updatingPackRef.current)
       if (event.success) {
         loadPacks().catch(() => {})
       }
@@ -154,16 +172,31 @@ export default function InstalledPacks() {
     })
   }, [storeLaunch])
 
+  const presentInstallResult = useCallback((pack: ModpackManifestReference, result: InstallResult): void => {
+    if (result.error === 'FEATURE_SELECTION_REQUIRED') return
+    setResultPack(pack)
+    setUpdateProgress(null)
+    setUpdateResult(result)
+    setUpdatingPack(null)
+    if (result.success) void loadPacks()
+  }, [loadPacks])
+
   const handleUpdate = useCallback(async (pack: ModpackManifestReference) => {
     setUpdatingPack(pack)
     setUpdateProgress(null)
     setUpdateResult(null)
-    window.electronAPI.installModpack(pack, undefined).catch((err) => {
+    try {
+      presentInstallResult(pack, await window.electronAPI.installModpack(pack, undefined))
+    } catch (err) {
       console.error('Update error', err)
-      setUpdatingPack(null)
-      setUpdateProgress(null)
-    })
-  }, [])
+      presentInstallResult(pack, {
+        success: false,
+        packName: pack.name,
+        failures: [],
+        error: err instanceof Error ? err.message : 'Installation fehlgeschlagen.',
+      })
+    }
+  }, [presentInstallResult])
 
   const handleUpdateCancel = useCallback(() => {
     window.electronAPI.installCancel().catch(console.error)
@@ -174,20 +207,63 @@ export default function InstalledPacks() {
 
   const handleUpdateDismiss = useCallback(() => {
     setUpdateResult(null)
+    setResultPack(null)
   }, [])
 
-  const handleFeatureConfirm = useCallback((selectedFeatures: string[]) => {
+  const handleRetryFailed = useCallback(async () => {
+    if (!resultPack) return
+    const pack = resultPack
+    setUpdatingPack(pack)
+    setUpdateResult(null)
+    setUpdateProgress(null)
+    try {
+      presentInstallResult(pack, await window.electronAPI.installRetryFailed(pack.name))
+    } catch (caught) {
+      presentInstallResult(pack, {
+        success: false,
+        packName: pack.name,
+        failures: [],
+        error: caught instanceof Error ? caught.message : 'Erneuter Versuch fehlgeschlagen.',
+      })
+    }
+  }, [presentInstallResult, resultPack])
+
+  const handleRepairFailed = useCallback(async () => {
+    if (!resultPack) return
+    const pack = resultPack
+    setUpdatingPack(pack)
+    setUpdateResult(null)
+    setUpdateProgress(null)
+    try {
+      presentInstallResult(pack, await window.electronAPI.installRepairPack(pack.name))
+    } catch (caught) {
+      presentInstallResult(pack, {
+        success: false,
+        packName: pack.name,
+        failures: [],
+        error: caught instanceof Error ? caught.message : 'Reparatur fehlgeschlagen.',
+      })
+    }
+  }, [presentInstallResult, resultPack])
+
+  const handleFeatureConfirm = useCallback(async (selectedFeatures: string[]) => {
     if (!pendingFeaturesPack) return
     const pack = pendingFeaturesPack
     setPendingFeaturesPack(null)
     setPendingFeatures([])
     setUpdatingPack(pack)
-    window.electronAPI.installModpack(pack, selectedFeatures).catch((err) => {
+    try {
+      presentInstallResult(pack, await window.electronAPI.installModpack(pack, selectedFeatures))
+    } catch (err) {
       console.error('Update with features error', err)
-      setUpdatingPack(null)
-      setUpdateProgress(null)
-    })
-  }, [pendingFeaturesPack])
+      presentInstallResult(pack, {
+        success: false,
+        packName: pack.name,
+        failures: [],
+        error: err instanceof Error ? err.message : 'Installation fehlgeschlagen.',
+      })
+    }
+  }, [pendingFeaturesPack, presentInstallResult])
 
   const handleFeatureCancel = useCallback(() => {
     setPendingFeaturesPack(null)
@@ -225,6 +301,23 @@ export default function InstalledPacks() {
   }, [])
 
   const handleContextMenuClose = useCallback(() => setContextMenu(null), [])
+
+  const handleRepairPack = useCallback(async (pack: ModpackManifestReference) => {
+    setUpdatingPack(pack)
+    setResultPack(pack)
+    setUpdateProgress(null)
+    setUpdateResult(null)
+    try {
+      presentInstallResult(pack, await window.electronAPI.installRepairPack(pack.name))
+    } catch (error) {
+      presentInstallResult(pack, {
+        success: false,
+        packName: pack.name,
+        failures: [],
+        error: error instanceof Error ? error.message : 'Reparatur fehlgeschlagen.',
+      })
+    }
+  }, [presentInstallResult])
 
   const handleChangeFeatures = useCallback(async (packName: string) => {
     try {
@@ -278,10 +371,16 @@ export default function InstalledPacks() {
         label: 'Einstellungen',
         action: () => setPackSettingsTarget(packName),
       },
+      ...(pack ? [{
+        label: 'Modpack reparieren',
+        disabled: activePackNames.has(packName) || !!changingFeaturesPack || !!updatingPack,
+        title: activePackNames.has(packName) ? 'Modpack läuft gerade' : undefined,
+        action: () => handleRepairPack(pack),
+      }] : []),
       ...(featuresMap[packName] ? [{
         label: 'Optionale Mods',
-        disabled: runningPack === packName || !!changingFeaturesPack || !!updatingPack,
-        title: runningPack === packName ? 'Modpack läuft gerade' : undefined,
+        disabled: activePackNames.has(packName) || !!changingFeaturesPack || !!updatingPack,
+        title: activePackNames.has(packName) ? 'Modpack läuft gerade' : undefined,
         action: () => handleChangeFeatures(packName),
       }] : []),
       {
@@ -298,19 +397,22 @@ export default function InstalledPacks() {
       },
       {
         label: 'Konsole anzeigen',
-        action: () => window.dispatchEvent(new CustomEvent('open-console')),
+        action: () => {
+          const session = activeSessions.find((entry) => entry.packName === packName)
+          window.dispatchEvent(new CustomEvent('open-console', { detail: session?.id }))
+        },
       },
       {
         label: 'Löschen',
         danger: true,
-        disabled: runningPack === packName,
-        title: runningPack === packName ? 'Modpack läuft gerade' : undefined,
+        disabled: activePackNames.has(packName),
+        title: activePackNames.has(packName) ? 'Modpack läuft gerade' : undefined,
         action: () => handleDelete(packName),
       },
     ]
-  }, [contextMenu?.packName, packs, updateMap, featuresMap, runningPack, changingFeaturesPack, updatingPack, handleUpdate, handleUploadCrash, handleDelete, handleChangeFeatures])
+  }, [contextMenu?.packName, packs, updateMap, featuresMap, activePackNames, activeSessions, changingFeaturesPack, updatingPack, handleUpdate, handleRepairPack, handleUploadCrash, handleDelete, handleChangeFeatures])
 
-  const isGameRunning = launchState === 'running' || launchState === 'launching'
+  const isGameRunning = activeSessions.length > 0
   const updateCount = Object.values(updateMap).filter(Boolean).length
 
   return (
@@ -335,7 +437,7 @@ export default function InstalledPacks() {
             <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-accent/10 border border-accent/30">
               <span className="w-2 h-2 rounded-full bg-accent animate-pulse" />
               <span className="text-xs font-medium text-accent">
-                {launchState === 'launching' ? 'Startet...' : 'Läuft...'}
+                {activeSessions.length} aktiv
               </span>
             </div>
           )}
@@ -404,7 +506,7 @@ export default function InstalledPacks() {
             <ModpackCard
               manifest={pack}
               isInstalled={true}
-              isRunning={runningPack === pack.name}
+              isRunning={activePackNames.has(pack.name)}
               hasUpdate={updateMap[pack.name]}
               onPlay={() => handlePlay(pack.name)}
               onUpdate={() => handleUpdate(pack)}
@@ -438,11 +540,14 @@ export default function InstalledPacks() {
       {(updatingPack || updateResult) && (
         <ProgressModal
           progress={updateProgress}
-          packTitle={updatingTitleRef.current}
+          packTitle={updatingPack?.title ?? resultPack?.title ?? updatingTitleRef.current}
           result={updateResult}
           successText="Erfolgreich aktualisiert!"
           onCancel={handleUpdateCancel}
           onDismiss={handleUpdateDismiss}
+          onRetry={handleRetryFailed}
+          onRepair={handleRepairFailed}
+          onOpenLogs={() => window.electronAPI.configOpenLogs()}
         />
       )}
 

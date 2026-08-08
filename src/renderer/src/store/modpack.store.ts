@@ -26,14 +26,14 @@ import type {
   InstallCompleteEvent,
   InstallNeedsFeaturesEvent,
   InstallProgressEvent,
+  InstalledPackSummary,
   ModpackManifestReference,
 } from '@shared/types'
 import { ipc, onEvent } from '@renderer/ipc/client'
 
 // ─── State & actions ─────────────────────────────────────────────────────────
 
-/** Lightweight shape returned by installGetInstalled — not a full manifest. */
-type InstalledPackInfo = { name: string; version: string; hasFeatures: boolean }
+type InstalledPackInfo = InstalledPackSummary
 
 interface ModpackState {
   // ── Data ────────────────────────────────────────────────────────────────────

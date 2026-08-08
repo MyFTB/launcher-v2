@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { LauncherConfig, PackConfig } from '@shared/types'
+import type { RendererConfig, PackConfig } from '@shared/types'
 import { MINECRAFT_MIN_MB, RAM_STEP_MB, computeMaxMemoryMb, buildLandmarks, memLabel, clampMemory, ThumbLabel } from '../utils/memory-slider'
 
 // ─── Props ───────────────────────────────────────────────────────────────────
@@ -13,7 +13,7 @@ interface PackSettingsModalProps {
 // ─── Modal ───────────────────────────────────────────────────────────────────
 
 export default function PackSettingsModal({ packName, packTitle, onClose }: PackSettingsModalProps) {
-  const [globalConfig, setGlobalConfig] = useState<LauncherConfig | null>(null)
+  const [globalConfig, setGlobalConfig] = useState<RendererConfig | null>(null)
   const [totalRamMb, setTotalRamMb]     = useState<number | undefined>(undefined)
   const [loading, setLoading]           = useState(true)
   const [saving, setSaving]             = useState(false)

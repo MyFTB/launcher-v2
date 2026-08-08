@@ -1,7 +1,8 @@
 import { memo, useEffect, useState, useRef, useCallback } from 'react'
-import type { ModpackManifestReference, LauncherProfile } from '@shared/types'
+import type { ModpackManifestReference } from '@shared/types'
 import { useNavigate } from 'react-router-dom'
 import { useLaunchStore } from '../store/launch.store'
+import { useAuthStore } from '../store/auth.store'
 
 const RecentPackCard = memo(function RecentPackCard({ pack, onPlay }: { pack: ModpackManifestReference; onPlay: (name: string) => void }) {
   const [logoUrl, setLogoUrl] = useState<string | null>(null)
@@ -46,10 +47,14 @@ const RecentPackCard = memo(function RecentPackCard({ pack, onPlay }: { pack: Mo
 export default function Home() {
   const navigate = useNavigate()
   const storeLaunch = useLaunchStore((s) => s.launch)
-  const [username, setUsername] = useState<string>('Spieler')
-  const [isLoggedIn, setIsLoggedIn] = useState<boolean | null>(null)
-  const [profiles, setProfiles] = useState<LauncherProfile[]>([])
-  const [selectedUuid, setSelectedUuid] = useState<string | undefined>()
+  const switchProfile = useAuthStore((s) => s.switchProfile)
+  const authError = useAuthStore((s) => s.loginError)
+  const profiles = useAuthStore((s) => s.profiles)
+  const selectedUuid = useAuthStore((s) => s.selectedUuid)
+  const [fallbackUsername, setFallbackUsername] = useState<string>('Spieler')
+  const selectedProfile = profiles.find((profile) => profile.uuid === selectedUuid)
+  const username = selectedProfile?.lastKnownUsername ?? fallbackUsername
+  const isLoggedIn = profiles.length > 0
   const [showAccountPicker, setShowAccountPicker] = useState(false)
   const [recentPacks, setRecentPacks] = useState<ModpackManifestReference[]>([])
   const [loading, setLoading] = useState(true)
@@ -66,55 +71,34 @@ export default function Home() {
   }, [])
 
   useEffect(() => {
-    const unsub = window.electronAPI.on('auth:profiles-updated', (...args: unknown[]) => {
-      const event = args[0] as { profiles: LauncherProfile[]; selectedUuid?: string }
-      setProfiles(event.profiles)
-      setSelectedUuid(event.selectedUuid)
-      setIsLoggedIn(event.profiles.length > 0)
-      // Derive username from the newly selected profile so the greeting updates.
-      if (event.selectedUuid) {
-        const profile = event.profiles.find((p) => p.uuid === event.selectedUuid)
-        if (profile?.lastKnownUsername) {
-          setUsername(profile.lastKnownUsername)
-          localStorage.setItem('lastUsername', profile.lastKnownUsername)
-        }
-      }
-    })
-    return unsub
-  }, [])
+    if (selectedProfile?.lastKnownUsername) {
+      localStorage.setItem('lastUsername', selectedProfile.lastKnownUsername)
+    }
+  }, [selectedProfile?.lastKnownUsername])
 
   useEffect(() => {
     const stored = localStorage.getItem('lastUsername')
-    if (stored) setUsername(stored)
+    if (stored) setFallbackUsername(stored)
 
     async function load(): Promise<void> {
       try {
         const config = await window.electronAPI.configGet()
 
-        const selectedUuid = config.profileStore?.selectedProfileUuid
-        const hasProfiles = (config.profileStore?.profiles?.length ?? 0) > 0
-        setIsLoggedIn(hasProfiles)
-        setProfiles(config.profileStore?.profiles ?? [])
-        setSelectedUuid(selectedUuid)
-        if (selectedUuid) {
-          const profile = config.profileStore.profiles.find((p) => p.uuid === selectedUuid)
-          if (profile?.lastKnownUsername) {
-            setUsername(profile.lastKnownUsername)
-            localStorage.setItem('lastUsername', profile.lastKnownUsername)
-          }
-        }
-
         const lastPlayed = config.lastPlayedPacks ?? []
         if (lastPlayed.length > 0) {
           try {
-            const installed = await window.electronAPI.packsGetRemote()
+            const [remote, local] = await Promise.all([
+              window.electronAPI.packsGetRemote().catch(() => []),
+              window.electronAPI.installGetInstalled(),
+            ])
             const matched = lastPlayed
               .slice(0, 3)
-              .map((name) => installed.find((p) => p.name === name))
-              .filter((p): p is ModpackManifestReference => p !== undefined)
+              .map((name) => remote.find((pack) => pack.name === name)
+                ?? local.find((pack) => pack.name === name))
+              .filter((pack): pack is ModpackManifestReference => pack !== undefined)
             setRecentPacks(matched)
           } catch {
-            // Remote unavailable — skip recent packs
+            // Local manifests are unavailable or invalid.
           }
         }
       } catch (err) {
@@ -157,7 +141,9 @@ export default function Home() {
                         key={p.uuid}
                         className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-bg-elevated active:scale-[0.98] transition-[background-color,transform] duration-150 text-left"
                         onClick={() => {
-                          window.electronAPI.authSwitchProfile(p.uuid).catch(console.error)
+                          void switchProfile(p.uuid).catch(() => {
+                            // The typed auth store exposes the visible error above.
+                          })
                           setShowAccountPicker(false)
                         }}
                       >
@@ -200,6 +186,12 @@ export default function Home() {
         </h1>
         <p className="text-text-secondary mt-1">Starte dein Lieblings-Modpack oder entdecke Neues.</p>
       </div>
+
+      {authError && (
+        <div className="mb-4 rounded-lg border border-red-700/50 bg-red-900/25 px-4 py-3 text-sm text-red-300" role="alert">
+          Account-Wechsel fehlgeschlagen: {authError}
+        </div>
+      )}
 
       {/* Not-authenticated banner */}
       {isLoggedIn === false && (

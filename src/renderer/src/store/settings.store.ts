@@ -14,13 +14,13 @@
 
 import { create } from 'zustand'
 import { useEffect, useRef, useState } from 'react'
-import type { LauncherConfig, SystemInfoResult } from '@shared/types'
+import type { RendererConfig, RendererConfigPatch, SystemInfoResult } from '@shared/types'
 import { ipc } from '@renderer/ipc/client'
 
 // ─── State & actions ─────────────────────────────────────────────────────────
 
 interface SettingsState {
-  config: LauncherConfig | null
+  config: RendererConfig | null
   loading: boolean
   dirty: boolean
 
@@ -35,7 +35,7 @@ interface SettingsState {
    * Merge a partial config into the in-memory state and mark dirty.
    * Does nothing if config hasn't been loaded yet.
    */
-  update(partial: Partial<LauncherConfig>): void
+  update(partial: Partial<RendererConfig>): void
   /** Open the launcher log directory in the OS file explorer. */
   openLogs(): Promise<void>
 }
@@ -60,11 +60,21 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   async save() {
     const { config } = get()
     if (config === null) return
-    await ipc.config.save(config)
+    const patch: RendererConfigPatch = {
+      jvmArgs: config.jvmArgs,
+      maxMemory: config.maxMemory,
+      minMemory: config.minMemory,
+      gameWidth: config.gameWidth,
+      gameHeight: config.gameHeight,
+      packKey: config.packKey,
+      allowWebstart: config.allowWebstart,
+      packConfigs: config.packConfigs,
+    }
+    await ipc.config.save(patch)
     set({ dirty: false })
   },
 
-  update(partial: Partial<LauncherConfig>) {
+  update(partial: Partial<RendererConfig>) {
     const { config } = get()
     if (config === null) return
     set({ config: { ...config, ...partial }, dirty: true })

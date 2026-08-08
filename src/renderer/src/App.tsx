@@ -1,15 +1,17 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { LaunchState } from '@shared/types'
+import type { DataRecoveryState } from '@shared/types'
 import Sidebar from './components/Sidebar'
 import TitleBar from './components/TitleBar'
 import UpdateBanner from './components/UpdateBanner'
+import RecoveryModal from './components/RecoveryModal'
 import Home from './pages/Home'
 import AvailablePacks from './pages/AvailablePacks'
 import InstalledPacks from './pages/InstalledPacks'
 import Settings from './pages/Settings'
 import Console from './pages/Console'
 import News from './pages/News'
+import { useLaunchStore } from './store/launch.store'
 import {
   getKnownPacks,
   getStoredNewPacks,
@@ -47,15 +49,8 @@ const MAX_DRAWER_RATIO = 0.85
 /** Floating action button that shows the console open toggle.
  *  Owns `isGameActive` state so launch events don't re-render the whole App. */
 function GameFAB({ consoleOpen, onOpen }: { consoleOpen: boolean; onOpen: () => void }) {
-  const [isGameActive, setIsGameActive] = useState(false)
-
-  useEffect(() => {
-    const unsub = window.electronAPI.on('launch:state', (...args: unknown[]) => {
-      const event = args[0] as { state: LaunchState }
-      setIsGameActive(event.state === 'launching' || event.state === 'running')
-    })
-    return unsub
-  }, [])
+  const isGameActive = useLaunchStore((state) => Object.values(state.sessions)
+    .some((session) => session.state === 'launching' || session.state === 'running'))
 
   if (consoleOpen) return null
 
@@ -77,11 +72,21 @@ export default function App() {
   const [consoleOpen, setConsoleOpen] = useState(false)
   const [drawerHeight, setDrawerHeight] = useState(300)
   const [isDragging, setIsDragging] = useState(false)
+  const [recovery, setRecovery] = useState<DataRecoveryState | null>(null)
   const drawerRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<{ startY: number; startH: number } | null>(null)
 
   useEffect(() => {
-    window.electronAPI.configGet().catch(console.error)
+    Promise.all([
+      window.electronAPI.configGet(),
+      window.electronAPI.configGetRecovery(),
+    ]).then(([, state]) => setRecovery(state)).catch((error: unknown) => {
+      setRecovery({
+        status: 'needs-recovery',
+        source: 'config',
+        message: error instanceof Error ? error.message : 'Die Konfiguration konnte nicht geladen werden.',
+      })
+    })
   }, [])
 
   // Background pack check on startup so Sidebar badge shows before visiting Available Packs
@@ -105,7 +110,11 @@ export default function App() {
 
   // Allow other components to open the console via custom event
   useEffect(() => {
-    const handler = (): void => setConsoleOpen(true)
+    const handler = (event: Event): void => {
+      const sessionId = (event as CustomEvent<string | undefined>).detail
+      if (sessionId) useLaunchStore.getState().selectSession(sessionId)
+      setConsoleOpen(true)
+    }
     window.addEventListener('open-console', handler)
     return () => window.removeEventListener('open-console', handler)
   }, [])
@@ -134,7 +143,8 @@ export default function App() {
   }, [])
 
   const handleDetach = useCallback((): void => {
-    window.electronAPI.windowOpenConsole().catch(console.error)
+    const selected = useLaunchStore.getState().selectedSessionId ?? undefined
+    window.electronAPI.windowOpenConsole(selected).catch(console.error)
     setConsoleOpen(false)
   }, [])
 
@@ -144,6 +154,11 @@ export default function App() {
     <div className="flex flex-col h-full bg-bg-base text-text-primary overflow-hidden">
       <TitleBar />
       <UpdateBanner />
+      {recovery?.status === 'recovered-backup' && (
+        <div className="border-b border-amber-700/40 bg-amber-900/20 px-4 py-2 text-center text-xs text-amber-200" role="status">
+          {recovery.message ?? 'Die letzte gültige Sicherung wurde wiederhergestellt.'}
+        </div>
+      )}
 
       <div className="flex flex-1 overflow-hidden">
         <Sidebar />
@@ -166,8 +181,10 @@ export default function App() {
             ref={drawerRef}
             className="absolute inset-x-0 bottom-0 flex flex-col bg-bg-surface border-t border-border shadow-2xl overflow-hidden"
             style={{
-              height: consoleOpen ? drawerHeight : 0,
-              transition: isDragging ? 'none' : 'height 300ms ease-in-out',
+              height: drawerHeight,
+              transform: consoleOpen ? 'translateY(0)' : 'translateY(100%)',
+              transition: isDragging ? 'none' : 'transform 300ms ease-in-out',
+              pointerEvents: consoleOpen ? 'auto' : 'none',
             }}
           >
             {/* Resize handle */}
@@ -209,6 +226,15 @@ export default function App() {
           <GameFAB consoleOpen={consoleOpen} onOpen={handleOpenConsole} />
         </main>
       </div>
+
+      {recovery?.status === 'needs-recovery' && (
+        <RecoveryModal
+          state={recovery}
+          onResolved={() => {
+            void window.electronAPI.configGetRecovery().then(setRecovery)
+          }}
+        />
+      )}
     </div>
   )
 }

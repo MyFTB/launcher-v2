@@ -43,6 +43,8 @@ interface AuthState {
 
 // ─── Store ───────────────────────────────────────────────────────────────────
 
+let listenersInitialized = false
+
 export const useAuthStore = create<AuthState>()((set) => ({
   profiles: [],
   selectedUuid: undefined,
@@ -62,14 +64,23 @@ export const useAuthStore = create<AuthState>()((set) => ({
   },
 
   async logout() {
-    await ipc.auth.logout()
-    // Main process will push an 'auth:profiles-updated' event with the new
-    // (empty or reduced) profile list.
+    set({ loginError: null })
+    try {
+      await ipc.auth.logout()
+    } catch (error) {
+      set({ loginError: error instanceof Error ? error.message : 'Abmelden fehlgeschlagen.' })
+      throw error
+    }
   },
 
   async switchProfile(uuid: string) {
-    await ipc.auth.switchProfile(uuid)
-    // Main process will push 'auth:profiles-updated' with the new selectedUuid.
+    set({ loginError: null })
+    try {
+      await ipc.auth.switchProfile(uuid)
+    } catch (error) {
+      set({ loginError: error instanceof Error ? error.message : 'Account-Wechsel fehlgeschlagen.' })
+      throw error
+    }
   },
 
   _setProfiles(profiles: LauncherProfile[], selectedUuid: string | undefined) {
@@ -77,6 +88,17 @@ export const useAuthStore = create<AuthState>()((set) => ({
   },
 
   initListeners() {
+    if (listenersInitialized) return
+    listenersInitialized = true
+    void ipc.config.get().then((config) => {
+      useAuthStore.getState()._setProfiles(
+        config.profileStore.profiles,
+        config.profileStore.selectedProfileUuid,
+      )
+    }).catch((error: unknown) => {
+      set({ loginError: error instanceof Error ? error.message : 'Accounts konnten nicht geladen werden.' })
+    })
+
     // 'auth:profiles-updated' — main pushes the full profile list after any
     // auth state change (login, logout, token refresh, switch).
     onEvent('auth:profiles-updated', (...args: unknown[]) => {
