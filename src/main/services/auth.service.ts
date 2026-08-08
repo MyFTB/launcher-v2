@@ -1,19 +1,26 @@
 import http from 'node:http'
-import { ipcMain, shell } from 'electron'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
+import { dialog, shell } from 'electron'
 
 import { configService } from './config.service'
+import { credentialService, type AuthCredential } from './credential.service'
 import { IpcChannels } from '../ipc/channels'
+import { secureHandle, noPayload, IpcError } from '../ipc/security'
 import { Constants } from '../constants'
-import { LauncherProfile, AuthProfilesUpdatedEvent } from '../../shared/types'
+import type {
+  AuthenticatedProfile,
+  AuthProfileSummary,
+  AuthProfilesUpdatedEvent,
+} from '../../shared/types'
+import { assertUuid, validateAuthSwitchProfilePayload } from '../../shared/validation'
 import { getMainWindow } from '../app-state'
 import { logger } from '../logger'
-
-// ─── OAuth / Auth API constants ──────────────────────────────────────────────
 
 const CLIENT_ID = Constants.microsoftLoginClientId
 const OAUTH_SCOPE = Constants.microsoftOAuthScope
 const REDIRECT_PORT = Constants.microsoftOAuthRedirectPort
 const REDIRECT_URI = `http://localhost:${REDIRECT_PORT}/login_callback`
+const CALLBACK_TIMEOUT_MS = 5 * 60_000
 
 const MS_OAUTH_AUTHORIZE = 'https://login.live.com/oauth20_authorize.srf'
 const MS_OAUTH_TOKEN = 'https://login.live.com/oauth20_token.srf'
@@ -22,504 +29,471 @@ const XSTS_AUTH_URL = 'https://xsts.auth.xboxlive.com/xsts/authorize'
 const MC_XBOX_AUTH_URL = 'https://api.minecraftservices.com/authentication/login_with_xbox'
 const MC_PROFILE_URL = 'https://api.minecraftservices.com/minecraft/profile'
 
-// ─── Response shape interfaces (internal) ────────────────────────────────────
+type AuthServiceName = 'Microsoft' | 'Xbox Live' | 'Minecraft'
+type AuthFailureKind = 'temporary' | 'rejected' | 'invalid-profile'
+
+export class AuthFlowError extends Error {
+  constructor(
+    readonly service: AuthServiceName,
+    readonly kind: AuthFailureKind,
+    message: string,
+    readonly status?: number,
+  ) {
+    super(message)
+    this.name = 'AuthFlowError'
+  }
+}
 
 interface OauthTokenResponse {
   access_token: string
-  refresh_token: string
-  token_type: string
+  refresh_token?: string
   expires_in: number
 }
-
 interface XboxAuthResponse {
   Token: string
-  DisplayClaims: {
-    xui: Array<{ uhs: string }>
-  }
+  DisplayClaims: { xui: Array<{ uhs: string }> }
 }
-
 interface MinecraftAuthResponse {
   access_token: string
-  token_type: string
   expires_in: number
 }
+interface MinecraftProfileResponse { id: string; name: string }
+interface LoginResult { summary: AuthProfileSummary; credential: AuthCredential }
 
-interface MinecraftProfileResponse {
-  id: string
-  name: string
+function isTemporaryStatus(status: number): boolean {
+  return status === 408 || status === 425 || status === 429 || status >= 500
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-/** Push the current profile list to the renderer. */
-function pushProfilesUpdated(): void {
-  const win = getMainWindow()
-  if (!win || win.isDestroyed()) return
-
-  const { profiles, selectedProfileUuid } = configService.get().profileStore
-  const payload: AuthProfilesUpdatedEvent = {
-    profiles,
-    selectedUuid: selectedProfileUuid,
+async function requestJson<T>(
+  service: AuthServiceName,
+  url: string,
+  init: RequestInit,
+): Promise<T> {
+  let response: Response
+  try {
+    response = await fetch(url, {
+      ...init,
+      signal: init.signal ?? AbortSignal.timeout(Constants.connectTimeoutMs),
+    })
+  } catch (error) {
+    const temporary = error instanceof Error
+      && ['AbortError', 'TimeoutError', 'TypeError'].includes(error.name)
+    throw new AuthFlowError(
+      service,
+      temporary ? 'temporary' : 'rejected',
+      `${service} ist derzeit nicht erreichbar.`,
+    )
   }
-  win.webContents.send(IpcChannels.AUTH_PROFILES_UPDATED, payload)
-}
 
-/** Persist a profile list back into config (upsert by uuid). */
-async function saveProfile(profile: LauncherProfile): Promise<void> {
-  const config = configService.get()
-  const existing = config.profileStore.profiles.filter((p) => p.uuid !== profile.uuid)
-  configService.merge({
-    profileStore: {
-      ...config.profileStore,
-      profiles: [...existing, profile],
-      // Keep selectedProfileUuid pointing at this profile on first login
-      selectedProfileUuid: config.profileStore.selectedProfileUuid ?? profile.uuid,
-    },
-  })
-  await configService.save()
-}
+  if (!response.ok) {
+    // Never include upstream bodies: OAuth responses can contain credentials.
+    const kind: AuthFailureKind = isTemporaryStatus(response.status) ? 'temporary' : 'rejected'
+    throw new AuthFlowError(
+      service,
+      kind,
+      kind === 'temporary'
+        ? `${service} ist vorübergehend nicht verfügbar (HTTP ${response.status}).`
+        : `Die Anmeldung bei ${service} wurde abgelehnt (HTTP ${response.status}).`,
+      response.status,
+    )
+  }
 
-// ─── Step 2: Exchange code / refresh token for Microsoft OAuth tokens ─────────
+  try {
+    return await response.json() as T
+  } catch {
+    throw new AuthFlowError(service, 'temporary', `${service} hat eine ungültige Antwort gesendet.`)
+  }
+}
 
 async function fetchOauthTokens(
-  code: string,
+  codeOrRefreshToken: string,
   isRefresh: boolean,
+  codeVerifier?: string,
 ): Promise<OauthTokenResponse> {
   const body = new URLSearchParams({
     client_id: CLIENT_ID,
-    [isRefresh ? 'refresh_token' : 'code']: code,
+    [isRefresh ? 'refresh_token' : 'code']: codeOrRefreshToken,
     grant_type: isRefresh ? 'refresh_token' : 'authorization_code',
     redirect_uri: isRefresh ? '' : REDIRECT_URI,
     scope: OAUTH_SCOPE,
   })
-
-  const response = await fetch(MS_OAUTH_TOKEN, {
+  if (!isRefresh && codeVerifier) body.set('code_verifier', codeVerifier)
+  return requestJson('Microsoft', MS_OAUTH_TOKEN, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: body.toString(),
-    signal: AbortSignal.timeout(Constants.connectTimeoutMs),
   })
-
-  if (!response.ok) {
-    const text = await response.text().catch(() => '<no body>')
-    throw new Error(`Microsoft OAuth token request failed (${response.status}): ${text}`)
-  }
-
-  return response.json() as Promise<OauthTokenResponse>
 }
-
-// ─── Step 3: XBL authentication ──────────────────────────────────────────────
 
 async function doXblAuthenticate(msAccessToken: string): Promise<XboxAuthResponse> {
-  const payload = {
-    RelyingParty: 'http://auth.xboxlive.com',
-    TokenType: 'JWT',
-    Properties: {
-      AuthMethod: 'RPS',
-      SiteName: 'user.auth.xboxlive.com',
-      RpsTicket: `d=${msAccessToken}`,
-    },
-  }
-
-  const response = await fetch(XBL_AUTH_URL, {
+  return requestJson('Xbox Live', XBL_AUTH_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(Constants.connectTimeoutMs),
+    body: JSON.stringify({
+      RelyingParty: 'http://auth.xboxlive.com',
+      TokenType: 'JWT',
+      Properties: {
+        AuthMethod: 'RPS',
+        SiteName: 'user.auth.xboxlive.com',
+        RpsTicket: `d=${msAccessToken}`,
+      },
+    }),
   })
-
-  if (!response.ok) {
-    const text = await response.text().catch(() => '<no body>')
-    throw new Error(`XBL authentication failed (${response.status}): ${text}`)
-  }
-
-  return response.json() as Promise<XboxAuthResponse>
 }
-
-// ─── Step 4: XSTS authentication ─────────────────────────────────────────────
 
 async function doXstsAuthenticate(xblToken: string): Promise<XboxAuthResponse> {
-  const payload = {
-    RelyingParty: 'rp://api.minecraftservices.com/',
-    TokenType: 'JWT',
-    Properties: {
-      SandboxId: 'RETAIL',
-      UserTokens: [xblToken],
-    },
-  }
-
-  const response = await fetch(XSTS_AUTH_URL, {
+  return requestJson('Xbox Live', XSTS_AUTH_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(Constants.connectTimeoutMs),
+    body: JSON.stringify({
+      RelyingParty: 'rp://api.minecraftservices.com/',
+      TokenType: 'JWT',
+      Properties: { SandboxId: 'RETAIL', UserTokens: [xblToken] },
+    }),
   })
-
-  if (!response.ok) {
-    const text = await response.text().catch(() => '<no body>')
-    throw new Error(`XSTS authentication failed (${response.status}): ${text}`)
-  }
-
-  return response.json() as Promise<XboxAuthResponse>
 }
-
-// ─── Step 5: Minecraft Xbox login ────────────────────────────────────────────
 
 async function doMinecraftXboxAuthenticate(
   xstsToken: string,
   userHash: string,
 ): Promise<MinecraftAuthResponse> {
-  const payload = {
-    identityToken: `XBL3.0 x=${userHash};${xstsToken}`,
-  }
-
-  const response = await fetch(MC_XBOX_AUTH_URL, {
+  return requestJson('Minecraft', MC_XBOX_AUTH_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(Constants.connectTimeoutMs),
+    body: JSON.stringify({ identityToken: `XBL3.0 x=${userHash};${xstsToken}` }),
   })
-
-  if (!response.ok) {
-    const text = await response.text().catch(() => '<no body>')
-    throw new Error(`Minecraft-Xbox authentication failed (${response.status}): ${text}`)
-  }
-
-  return response.json() as Promise<MinecraftAuthResponse>
 }
 
-// ─── Minecraft profile fetch ──────────────────────────────────────────────────
-
-async function fetchMinecraftProfile(
-  mcAccessToken: string,
-): Promise<MinecraftProfileResponse> {
-  const response = await fetch(MC_PROFILE_URL, {
+async function fetchMinecraftProfile(accessToken: string): Promise<MinecraftProfileResponse> {
+  return requestJson('Minecraft', MC_PROFILE_URL, {
     method: 'GET',
-    headers: { Authorization: `Bearer ${mcAccessToken}` },
-    signal: AbortSignal.timeout(Constants.connectTimeoutMs),
+    headers: { Authorization: `Bearer ${accessToken}` },
   })
-
-  if (!response.ok) {
-    const text = await response.text().catch(() => '<no body>')
-    throw new Error(`Minecraft profile fetch failed (${response.status}): ${text}`)
-  }
-
-  return response.json() as Promise<MinecraftProfileResponse>
 }
 
-// ─── Full login flow (steps 2–5 + profile) ───────────────────────────────────
-
-/**
- * Execute the complete Microsoft → XBL → XSTS → Minecraft auth chain.
- *
- * @param code  Either the OAuth authorization code (isRefresh=false) or the
- *              stored OAuth refresh token (isRefresh=true).
- * @param isRefresh  When true the `refresh_token` grant is used.
- */
-async function loginFlow(code: string, isRefresh: boolean): Promise<LauncherProfile> {
-  // Step 2 — OAuth tokens
-  const oauthResponse = await fetchOauthTokens(code, isRefresh)
-
-  // Step 3 — XBL
-  const xblResponse = await doXblAuthenticate(oauthResponse.access_token)
-
-  // Step 4 — XSTS
-  const xstsResponse = await doXstsAuthenticate(xblResponse.Token)
-
-  const userHash = xstsResponse.DisplayClaims.xui[0]?.uhs
-  if (!userHash) {
-    throw new Error('XSTS response did not contain a user hash (uhs)')
-  }
-
-  // Step 5 — Minecraft
-  const mcAuth = await doMinecraftXboxAuthenticate(xstsResponse.Token, userHash)
-
-  // Minecraft profile
-  const mcProfile = await fetchMinecraftProfile(mcAuth.access_token)
-
-  if (!mcProfile.id || !mcProfile.name) {
-    throw new Error('This Microsoft account does not have a valid Minecraft profile')
-  }
-
-  // Normalise UUID: insert dashes if the API returns a raw 32-char hex string
-  const rawId = mcProfile.id
-  const uuid =
-    rawId.includes('-')
-      ? rawId
-      : `${rawId.slice(0, 8)}-${rawId.slice(8, 12)}-${rawId.slice(12, 16)}-${rawId.slice(16, 20)}-${rawId.slice(20)}`
-
-  const profile: LauncherProfile = {
-    provider: 'microsoft',
-    uuid,
-    lastKnownUsername: mcProfile.name,
-    minecraftAccessToken: mcAuth.access_token,
-    oauthRefreshToken: oauthResponse.refresh_token,
-  }
-
-  return profile
+function normalizeUuid(rawId: string): string {
+  const withDashes = rawId.includes('-')
+    ? rawId
+    : `${rawId.slice(0, 8)}-${rawId.slice(8, 12)}-${rawId.slice(12, 16)}-${rawId.slice(16, 20)}-${rawId.slice(20)}`
+  return assertUuid(withDashes)
 }
 
-// ─── Token refresh ────────────────────────────────────────────────────────────
-
-/**
- * Refresh all tokens for the given profile using its stored OAuth refresh
- * token, and return a new `LauncherProfile` with updated tokens.
- */
-export async function refreshProfile(profile: LauncherProfile): Promise<LauncherProfile> {
-  if (!profile.oauthRefreshToken) {
-    throw new Error('Profile has no OAuth refresh token; cannot refresh')
+async function loginFlow(
+  codeOrRefreshToken: string,
+  isRefresh: boolean,
+  codeVerifier?: string,
+): Promise<LoginResult> {
+  const oauth = await fetchOauthTokens(codeOrRefreshToken, isRefresh, codeVerifier)
+  const xbl = await doXblAuthenticate(oauth.access_token)
+  const xsts = await doXstsAuthenticate(xbl.Token)
+  const userHash = xsts.DisplayClaims.xui[0]?.uhs
+  if (!userHash) throw new AuthFlowError('Xbox Live', 'rejected', 'Xbox Live hat keine Benutzer-ID geliefert.')
+  const minecraft = await doMinecraftXboxAuthenticate(xsts.Token, userHash)
+  const profile = await fetchMinecraftProfile(minecraft.access_token)
+  if (!profile.id || !profile.name) {
+    throw new AuthFlowError('Minecraft', 'invalid-profile', 'Dieses Konto besitzt kein gültiges Minecraft-Profil.')
   }
-
-  logger.debug(`[AuthService] Refreshing tokens for ${profile.lastKnownUsername}`)
-  const refreshed = await loginFlow(profile.oauthRefreshToken, true)
-  logger.debug(`[AuthService] Token refresh successful for ${refreshed.lastKnownUsername}`)
-
-  // Carry forward identity fields that won't change during a token refresh
+  const now = Date.now()
   return {
-    ...refreshed,
-    uuid: profile.uuid,
+    summary: {
+      provider: 'microsoft',
+      uuid: normalizeUuid(profile.id),
+      lastKnownUsername: profile.name,
+      minecraftTokenExpiresAt: now + Math.max(0, minecraft.expires_in) * 1_000,
+      lastAuthenticatedAt: now,
+    },
+    credential: {
+      minecraftAccessToken: minecraft.access_token,
+      oauthRefreshToken: oauth.refresh_token || (isRefresh ? codeOrRefreshToken : ''),
+    },
   }
 }
 
-// ─── Step 1: OAuth callback HTTP server ──────────────────────────────────────
+function pushProfilesUpdated(): void {
+  const window = getMainWindow()
+  if (!window || window.isDestroyed()) return
+  const { profiles, selectedProfileUuid } = configService.get().profileStore
+  const payload: AuthProfilesUpdatedEvent = { profiles, selectedUuid: selectedProfileUuid }
+  window.webContents.send(IpcChannels.AUTH_PROFILES_UPDATED, payload)
+}
 
-/**
- * Start a single-use HTTP server on REDIRECT_PORT that captures the `code`
- * query parameter from the Microsoft OAuth redirect and resolves the promise.
- *
- * The server closes itself after the first successful callback (or after the
- * returned abort signal fires).
- */
-function waitForOauthCallback(
-  expectedState: string,
-  signal: AbortSignal,
-): Promise<string> {
+async function persistProfile(result: LoginResult, preserveUuid?: string): Promise<AuthenticatedProfile> {
+  if (preserveUuid && result.summary.uuid !== preserveUuid) {
+    throw new AuthFlowError('Microsoft', 'rejected', 'Die erneuerte Anmeldung gehört zu einem anderen Minecraft-Profil.')
+  }
+  const summary = result.summary
+  const config = configService.get()
+  const profiles = config.profileStore.profiles.filter((entry) => entry.uuid !== summary.uuid)
+
+  // Persist encrypted credentials first. An orphaned encrypted entry is safer
+  // than profile metadata that points at missing credentials.
+  await credentialService.set(summary.uuid, result.credential)
+  configService.merge({
+    profileStore: {
+      profiles: [...profiles, summary],
+      selectedProfileUuid: config.profileStore.selectedProfileUuid ?? summary.uuid,
+    },
+  })
+  await configService.save()
+  return { ...summary, ...result.credential }
+}
+
+function waitForOauthCallback(expectedState: string, signal: AbortSignal): Promise<string> {
   return new Promise<string>((resolve, reject) => {
-    const server = http.createServer((req, res) => {
+    let settled = false
+    const server = http.createServer()
+    const timeout = setTimeout(() => finish(new AuthFlowError(
+      'Microsoft',
+      'temporary',
+      'Die Microsoft-Anmeldung hat zu lange gedauert.',
+    )), CALLBACK_TIMEOUT_MS)
+
+    const cleanup = (): void => {
+      clearTimeout(timeout)
+      signal.removeEventListener('abort', onAbort)
+      server.removeAllListeners()
+      if (server.listening) server.close()
+    }
+    const finish = (error?: Error, code?: string): void => {
+      if (settled) return
+      settled = true
+      cleanup()
+      if (error) reject(error)
+      else resolve(code!)
+    }
+    const onAbort = (): void => finish(new DOMException('OAuth flow aborted', 'AbortError'))
+
+    server.on('request', (request, response) => {
+      if (settled) {
+        response.writeHead(410).end()
+        return
+      }
       try {
-        const urlObj = new URL(req.url ?? '/', `http://localhost:${REDIRECT_PORT}`)
-
-        if (urlObj.pathname !== '/login_callback') {
-          res.writeHead(404).end()
+        const url = new URL(request.url ?? '/', `http://127.0.0.1:${REDIRECT_PORT}`)
+        if (url.pathname !== '/login_callback') {
+          response.writeHead(404).end()
           return
         }
-
-        const error = urlObj.searchParams.get('error')
-        if (error) {
-          const desc = urlObj.searchParams.get('error_description') ?? error
-          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }).end(
-            buildCallbackHtml(false, desc),
-          )
-          server.close()
-          reject(new Error(`OAuth error: ${desc}`))
+        const oauthError = url.searchParams.get('error')
+        if (oauthError) {
+          response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+            .end(buildCallbackHtml(false, 'Die Anmeldung wurde abgebrochen oder abgelehnt.'))
+          finish(new AuthFlowError('Microsoft', 'rejected', 'Die Microsoft-Anmeldung wurde abgelehnt.'))
           return
         }
-
-        const returnedState = urlObj.searchParams.get('state')
-        if (returnedState !== expectedState) {
-          res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' }).end(
-            buildCallbackHtml(false, 'Invalid state parameter — possible CSRF attempt.'),
-          )
-          server.close()
-          reject(new Error('OAuth state mismatch'))
+        if (url.searchParams.get('state') !== expectedState) {
+          response.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' })
+            .end(buildCallbackHtml(false, 'Ungültiger Sicherheitsstatus.'))
+          finish(new AuthFlowError('Microsoft', 'rejected', 'OAuth-Sicherheitsstatus stimmt nicht überein.'))
           return
         }
-
-        const code = urlObj.searchParams.get('code')
+        const code = url.searchParams.get('code')
         if (!code) {
-          res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' }).end(
-            buildCallbackHtml(false, 'No authorization code received.'),
-          )
-          server.close()
-          reject(new Error('No authorization code in OAuth callback'))
+          response.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' })
+            .end(buildCallbackHtml(false, 'Kein Anmeldecode empfangen.'))
+          finish(new AuthFlowError('Microsoft', 'rejected', 'Microsoft hat keinen Anmeldecode geliefert.'))
           return
         }
-
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }).end(
-          buildCallbackHtml(true),
-        )
-        server.close()
-        resolve(code)
-      } catch (err) {
-        res.writeHead(500).end()
-        server.close()
-        reject(err)
+        response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }).end(buildCallbackHtml(true))
+        finish(undefined, code)
+      } catch {
+        response.writeHead(500).end()
+        finish(new AuthFlowError('Microsoft', 'temporary', 'Der lokale Anmelde-Callback ist fehlgeschlagen.'))
       }
     })
-
-    server.on('error', (err) => {
-      reject(new Error(`OAuth callback server error: ${err.message}`))
-    })
-
+    server.once('error', () => finish(new AuthFlowError(
+      'Microsoft',
+      'temporary',
+      'Der lokale Microsoft-Anmeldeport ist nicht verfügbar.',
+    )))
+    signal.addEventListener('abort', onAbort, { once: true })
     server.listen(REDIRECT_PORT, '127.0.0.1')
-
-    // Abort handling: close the server if the caller cancels the flow
-    signal.addEventListener('abort', () => {
-      server.close()
-      reject(new Error('OAuth flow aborted'))
-    })
   })
 }
 
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+function escapeHtml(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }
 
-/** Generate a minimal self-closing HTML page shown in the user's browser. */
 function buildCallbackHtml(success: boolean, errorMessage?: string): string {
-  if (success) {
-    return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>MyFTB Launcher</title></head>
-<body style="font-family:sans-serif;text-align:center;padding:60px;background:#1a1a1a;color:#fff">
-  <h2>Login successful!</h2>
-  <p>You can close this tab and return to the launcher.</p>
-</body></html>`
-  }
-  const safeMessage = escapeHtml(errorMessage ?? 'An unknown error occurred.')
-  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>MyFTB Launcher</title></head>
-<body style="font-family:sans-serif;text-align:center;padding:60px;background:#1a1a1a;color:#fff">
-  <h2>Login failed</h2>
-  <p>${safeMessage}</p>
-  <p>Please close this tab and try again from the launcher.</p>
-</body></html>`
+  const heading = success ? 'Anmeldung erfolgreich' : 'Anmeldung fehlgeschlagen'
+  const message = success
+    ? 'Du kannst diesen Tab schließen und zum Launcher zurückkehren.'
+    : escapeHtml(errorMessage ?? 'Bitte versuche es im Launcher erneut.')
+  return `<!doctype html><html lang="de"><head><meta charset="utf-8"><title>MyFTB Launcher</title></head><body style="font-family:sans-serif;text-align:center;padding:60px;background:#1a1a1a;color:#fff"><h2>${heading}</h2><p>${message}</p></body></html>`
 }
-
-// ─── Public helper ────────────────────────────────────────────────────────────
-
-/**
- * Return the currently selected profile with an up-to-date Minecraft access
- * token.  Automatically refreshes via the stored OAuth refresh token and
- * persists the updated profile before returning.
- *
- * @throws if no profile is selected or the token refresh fails.
- */
-export async function getSelectedProfile(): Promise<LauncherProfile> {
-  const { profiles, selectedProfileUuid } = configService.get().profileStore
-
-  if (!selectedProfileUuid) {
-    throw new Error('No profile selected')
-  }
-
-  const profile = profiles.find((p) => p.uuid === selectedProfileUuid)
-  if (!profile) {
-    throw new Error(`Selected profile UUID "${selectedProfileUuid}" not found in store`)
-  }
-
-  // Always refresh tokens before handing the profile to a caller, so that
-  // the Minecraft access token is fresh when launching the game.
-  const refreshed = await refreshProfile(profile)
-  await saveProfile(refreshed)
-
-  return refreshed
-}
-
-// ─── Service class ────────────────────────────────────────────────────────────
 
 class AuthService {
-  /** Active OAuth flow abort controller — prevents more than one concurrent flow. */
   private activeFlowController: AbortController | null = null
+  private readonly refreshFlights = new Map<string, Promise<AuthenticatedProfile>>()
+
+  isBusy(): boolean {
+    return this.activeFlowController !== null || this.refreshFlights.size > 0
+  }
+
+  private async refreshProfile(summary: AuthProfileSummary): Promise<AuthenticatedProfile> {
+    const existing = this.refreshFlights.get(summary.uuid)
+    if (existing) return existing
+    const operation = (async () => {
+      const credential = credentialService.get(summary.uuid)
+      if (!credential?.oauthRefreshToken) {
+        throw new AuthFlowError('Microsoft', 'rejected', 'Für dieses Profil sind keine Anmeldedaten gespeichert.')
+      }
+      const result = await loginFlow(credential.oauthRefreshToken, true)
+      const refreshed = await persistProfile(result, summary.uuid)
+      pushProfilesUpdated()
+      return refreshed
+    })()
+    this.refreshFlights.set(summary.uuid, operation)
+    try {
+      return await operation
+    } finally {
+      if (this.refreshFlights.get(summary.uuid) === operation) this.refreshFlights.delete(summary.uuid)
+    }
+  }
+
+  async getSelectedProfileForLaunch(): Promise<AuthenticatedProfile> {
+    const { profiles, selectedProfileUuid } = configService.get().profileStore
+    if (!selectedProfileUuid) throw new IpcError('AUTH_REJECTED', 'Kein Microsoft-Profil ist ausgewählt.')
+    const summary = profiles.find((profile) => profile.uuid === selectedProfileUuid)
+    if (!summary) throw new IpcError('AUTH_REJECTED', 'Das ausgewählte Profil wurde nicht gefunden.')
+
+    for (;;) {
+      try {
+        return await this.refreshProfile(summary)
+      } catch (error) {
+        if (!(error instanceof AuthFlowError) || error.kind !== 'temporary') {
+          const window = getMainWindow()
+          const options = {
+            type: 'error' as const,
+            title: 'Anmeldung fehlgeschlagen',
+            message: error instanceof Error ? error.message : 'Die Anmeldung wurde abgelehnt.',
+            detail: 'Bitte melde das Konto in den Einstellungen erneut an.',
+            buttons: ['OK'],
+          }
+          if (window) await dialog.showMessageBox(window, options)
+          else await dialog.showMessageBox(options)
+          throw new IpcError('AUTH_REJECTED', error instanceof Error ? error.message : 'Anmeldung fehlgeschlagen.')
+        }
+
+        const cached = credentialService.get(summary.uuid)
+        const offlineEligible = !!cached?.minecraftAccessToken && !!summary.lastAuthenticatedAt
+        const buttons = offlineEligible
+          ? ['Erneut versuchen', 'Offline starten', 'Abbrechen']
+          : ['Erneut versuchen', 'Abbrechen']
+        const window = getMainWindow()
+        const options = {
+          type: 'warning' as const,
+          title: `${error.service} nicht erreichbar`,
+          message: error.message,
+          detail: offlineEligible
+            ? 'Du kannst einmalig offline starten. Multiplayer, Skins und andere Online-Funktionen können dabei ausfallen.'
+            : 'Für dieses Profil ist kein zuvor bestätigter Offline-Login verfügbar.',
+          buttons,
+          defaultId: 0,
+          cancelId: buttons.length - 1,
+          noLink: true,
+        }
+        const choice = window
+          ? await dialog.showMessageBox(window, options)
+          : await dialog.showMessageBox(options)
+        if (choice.response === 0) continue
+        if (offlineEligible && choice.response === 1) {
+          logger.warn(`[AuthService] One-time offline launch selected for ${summary.lastKnownUsername}`)
+          return { ...summary, ...cached! }
+        }
+        throw new IpcError('CANCELLED', 'Der Start wurde abgebrochen.')
+      }
+    }
+  }
 
   registerHandlers(): void {
-    // ── auth:start-microsoft ──────────────────────────────────────────────────
-    ipcMain.handle(IpcChannels.AUTH_START_MICROSOFT, async () => {
-      // Abort any already-running OAuth flow
-      if (this.activeFlowController) {
-        this.activeFlowController.abort()
-        this.activeFlowController = null
+    secureHandle(IpcChannels.AUTH_START_MICROSOFT, { validate: noPayload }, async () => {
+      if (configService.isDataDirMigrationActive()) {
+        throw new IpcError('CONFLICT', 'Während der Datenmigration ist keine Anmeldung möglich.')
       }
-
+      this.activeFlowController?.abort()
       const controller = new AbortController()
       this.activeFlowController = controller
-
+      let callbackPromise: Promise<string> | null = null
       try {
-        // Generate a CSRF-protection state value
-        const state = crypto.randomUUID()
-
-        // Build the Microsoft authorization URL
+        const state = randomUUID()
+        const verifier = randomBytes(48).toString('base64url')
+        const challenge = createHash('sha256').update(verifier).digest('base64url')
         const authUrl = new URL(MS_OAUTH_AUTHORIZE)
         authUrl.searchParams.set('response_type', 'code')
         authUrl.searchParams.set('client_id', CLIENT_ID)
         authUrl.searchParams.set('state', state)
         authUrl.searchParams.set('redirect_uri', REDIRECT_URI)
         authUrl.searchParams.set('scope', OAUTH_SCOPE)
+        authUrl.searchParams.set('code_challenge', challenge)
+        authUrl.searchParams.set('code_challenge_method', 'S256')
 
-        logger.info('[AuthService] Microsoft login started - opening browser')
-
-        // Start callback server before opening browser so the redirect is
-        // always captured even when the browser responds very quickly.
-        const codePromise = waitForOauthCallback(state, controller.signal)
-
-        // Step 1 — Open browser
+        callbackPromise = waitForOauthCallback(state, controller.signal)
         await shell.openExternal(authUrl.toString())
-
-        // Wait for the OAuth callback
-        const code = await codePromise
-
-        // Steps 2–5 + profile
-        const profile = await loginFlow(code, false)
-
-        await saveProfile(profile)
+        const code = await callbackPromise
+        const result = await loginFlow(code, false, verifier)
+        const profile = await persistProfile(result)
         logger.info(`[AuthService] Login successful: ${profile.lastKnownUsername} (${profile.uuid})`)
         pushProfilesUpdated()
-      } catch (err: unknown) {
-        const message =
-          err instanceof Error ? err.message : 'Microsoft login failed'
-
-        logger.error('[AuthService] Login failed:', err)
-
-        // Push an error event so the renderer can surface it in the UI
-        const win = getMainWindow()
-        if (win && !win.isDestroyed()) {
-          win.webContents.send(IpcChannels.AUTH_LOGIN_ERROR, { error: message })
-        }
-
-        throw err
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Die Microsoft-Anmeldung ist fehlgeschlagen.'
+        logger.warn(`[AuthService] Login failed: ${message}`)
+        getMainWindow()?.webContents.send(IpcChannels.AUTH_LOGIN_ERROR, {
+          error: message,
+          code: error instanceof Error && error.name === 'AbortError'
+            ? 'CANCELLED'
+            : error instanceof AuthFlowError && error.kind === 'temporary'
+              ? 'NETWORK_TEMPORARY'
+              : 'AUTH_REJECTED',
+        })
+        throw error
       } finally {
-        this.activeFlowController = null
+        controller.abort()
+        await callbackPromise?.catch(() => {})
+        if (this.activeFlowController === controller) this.activeFlowController = null
       }
     })
 
-    // ── auth:logout ───────────────────────────────────────────────────────────
-    ipcMain.handle(IpcChannels.AUTH_LOGOUT, async () => {
-      const config = configService.get()
-      const { profiles, selectedProfileUuid } = config.profileStore
-
-      const leaving = profiles.find((p) => p.uuid === selectedProfileUuid)
-      const remaining = profiles.filter((p) => p.uuid !== selectedProfileUuid)
-      const nextSelected = remaining.length > 0 ? remaining[remaining.length - 1].uuid : undefined
-
-      configService.merge({
-        profileStore: {
-          profiles: remaining,
-          selectedProfileUuid: nextSelected,
-        },
-      })
-      await configService.save()
-      logger.info(`[AuthService] Profile logged out: ${leaving?.lastKnownUsername ?? selectedProfileUuid}`)
-      pushProfilesUpdated()
-    })
-
-    // ── auth:switch-profile ───────────────────────────────────────────────────
-    ipcMain.handle(IpcChannels.AUTH_SWITCH_PROFILE, async (_event, uuid: string) => {
-      const config = configService.get()
-      const profile = config.profileStore.profiles.find((p) => p.uuid === uuid)
-
-      if (!profile) {
-        throw new Error(`Cannot switch to unknown profile UUID: ${uuid}`)
+    secureHandle(IpcChannels.AUTH_LOGOUT, { validate: noPayload }, async () => {
+      if (configService.isDataDirMigrationActive()) {
+        throw new IpcError('CONFLICT', 'Während der Datenmigration können Accounts nicht geändert werden.')
       }
-
+      const config = configService.get()
+      const selected = config.profileStore.selectedProfileUuid
+      const profiles = config.profileStore.profiles.filter((profile) => profile.uuid !== selected)
       configService.merge({
         profileStore: {
-          ...config.profileStore,
-          selectedProfileUuid: uuid,
+          profiles,
+          selectedProfileUuid: profiles.at(-1)?.uuid,
         },
       })
       await configService.save()
-      logger.info(`[AuthService] Switched to profile: ${profile.lastKnownUsername} (${uuid})`)
+      if (selected) await credentialService.delete(selected)
       pushProfilesUpdated()
     })
+
+    secureHandle(
+      IpcChannels.AUTH_SWITCH_PROFILE,
+      { validate: validateAuthSwitchProfilePayload },
+      async (_event, { uuid }) => {
+        if (configService.isDataDirMigrationActive()) {
+          throw new IpcError('CONFLICT', 'Während der Datenmigration können Accounts nicht geändert werden.')
+        }
+        const config = configService.get()
+        const profile = config.profileStore.profiles.find((entry) => entry.uuid === uuid)
+        if (!profile) throw new IpcError('NOT_FOUND', 'Dieses Profil ist nicht bekannt.')
+        configService.merge({
+          profileStore: { ...config.profileStore, selectedProfileUuid: uuid },
+        })
+        await configService.save()
+        pushProfilesUpdated()
+      },
+    )
   }
 }
 
-// ─── Singleton export ─────────────────────────────────────────────────────────
-
 export const authService = new AuthService()
+export async function getSelectedProfile(): Promise<AuthenticatedProfile> {
+  return authService.getSelectedProfileForLaunch()
+}

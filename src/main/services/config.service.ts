@@ -4,191 +4,438 @@ import os from 'node:os'
 import crypto from 'node:crypto'
 import { app } from 'electron'
 
-import { LauncherConfig, DEFAULT_CONFIG } from '../../shared/types'
+import {
+  DEFAULT_CONFIG,
+  type DataDirMigrationResult,
+  type DataRecoveryAction,
+  type DataRecoveryState,
+  type LauncherConfig,
+  type RendererConfig,
+} from '../../shared/types'
+import {
+  assertPackName,
+  parseLauncherConfig,
+  type LegacyCredential,
+} from '../../shared/validation'
 import { logger } from '../logger'
+import { assertContainedNoLinks } from '../filesystem-safety'
+import { writeDataDirPointer } from '../bootstrap'
 import {
   validateMigrationTarget,
   type MigrationValidation,
 } from '../../shared/migrate-validation'
 
-// ─── Helpers ────────────────────────────────────────────────────────────────
-
-/**
- * Detect a sensible default maxMemory value based on available system RAM.
- * Mirrors the Java LauncherConfig heuristic:
- *   >= 16 GB → 8192 MB
- *   >= 12 GB → 6144 MB
- *   >=  8 GB → 4096 MB
- *   else     → 4096 MB
- */
 function detectDefaultMaxMemory(): number {
   const totalMb = os.totalmem() / (1024 * 1024)
   if (totalMb >= 16 * 1024) return 8192
   if (totalMb >= 12 * 1024) return 6144
-  if (totalMb >= 8 * 1024) return 4096
   return 4096
 }
 
-/**
- * Deep-merge `incoming` on top of `base`, returning a new object.
- * Only own enumerable properties are considered; nested objects are merged
- * recursively (arrays are replaced, not concatenated).
- */
 function deepMerge<T extends object>(base: T, incoming: Partial<T>): T {
   const result: Record<string, unknown> = { ...(base as Record<string, unknown>) }
-
   for (const key of Object.keys(incoming) as (keyof T)[]) {
-    const incomingVal = incoming[key]
-    const baseVal = result[key as string]
-
+    const incomingValue = incoming[key]
+    const baseValue = result[key as string]
     if (
-      incomingVal !== null &&
-      typeof incomingVal === 'object' &&
-      !Array.isArray(incomingVal) &&
-      baseVal !== null &&
-      typeof baseVal === 'object' &&
-      !Array.isArray(baseVal)
+      incomingValue !== null
+      && typeof incomingValue === 'object'
+      && !Array.isArray(incomingValue)
+      && baseValue !== null
+      && typeof baseValue === 'object'
+      && !Array.isArray(baseValue)
     ) {
-      result[key as string] = deepMerge(
-        baseVal as object,
-        incomingVal as Partial<object>,
-      )
-    } else if (incomingVal !== undefined) {
-      result[key as string] = incomingVal
+      result[key as string] = deepMerge(baseValue as object, incomingValue as Partial<object>)
+    } else if (incomingValue !== undefined) {
+      result[key as string] = incomingValue
     }
   }
-
   return result as T
 }
 
-/** Return a deep clone of a plain JSON-serialisable object. */
 function deepClone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
 }
 
-// ─── Service ─────────────────────────────────────────────────────────────────
+async function syncDirectory(directory: string): Promise<void> {
+  let handle: Awaited<ReturnType<typeof fs.open>> | undefined
+  try {
+    handle = await fs.open(directory, 'r')
+    await handle.sync()
+  } catch {
+    // Directory fsync is not available on every supported platform/filesystem.
+  } finally {
+    await handle?.close().catch(() => {})
+  }
+}
+
+/** Write a file through a same-directory temporary file and atomic rename. */
+export async function atomicWriteFile(target: string, data: string | Uint8Array): Promise<void> {
+  const directory = path.dirname(target)
+  await fs.mkdir(directory, { recursive: true })
+  const temporary = path.join(
+    directory,
+    `.${path.basename(target)}.${process.pid}.${crypto.randomUUID()}.tmp`,
+  )
+  let handle: Awaited<ReturnType<typeof fs.open>> | undefined
+  try {
+    handle = await fs.open(temporary, 'wx', 0o600)
+    await handle.writeFile(data)
+    await handle.sync()
+    await handle.close()
+    handle = undefined
+    await fs.rename(temporary, target)
+    await syncDirectory(directory)
+  } catch (error) {
+    await handle?.close().catch(() => {})
+    await fs.rm(temporary, { force: true }).catch(() => {})
+    throw error
+  }
+}
+
+async function hashFile(filePath: string): Promise<string> {
+  const handle = await fs.open(filePath, 'r')
+  try {
+    const hash = crypto.createHash('sha256')
+    for await (const chunk of handle.createReadStream()) hash.update(chunk as Buffer)
+    return hash.digest('hex')
+  } finally {
+    await handle.close().catch(() => {})
+  }
+}
+
+const VOLATILE_USER_DATA_ENTRIES = new Set([
+  'Cache',
+  'Code Cache',
+  'Crashpad',
+  'DawnCache',
+  'DawnGraphiteCache',
+  'DawnWebGPUCache',
+  'DevToolsActivePort',
+  'GPUCache',
+  'GrShaderCache',
+  'ShaderCache',
+  'SingletonCookie',
+  'SingletonLock',
+  'SingletonSocket',
+  'VideoDecodeStats',
+  'blob_storage',
+  'lockfile',
+])
+
+/** Electron recreates these top-level cache and process-lock entries after restart. */
+export function shouldSkipDataDirEntry(relativePath: string): boolean {
+  return !relativePath.includes(path.sep) && VOLATILE_USER_DATA_ENTRIES.has(relativePath)
+}
+
+async function copyStableFile(source: string, target: string): Promise<void> {
+  let lastError: unknown
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    await fs.rm(target, { force: true }).catch(() => {})
+    try {
+      const before = await fs.lstat(source)
+      if (!before.isFile() || before.isSymbolicLink()) throw new Error(`Nicht unterstützter Dateityp: ${source}`)
+      await fs.copyFile(source, target, fs.constants.COPYFILE_EXCL)
+      await fs.chmod(target, before.mode & 0o777).catch(() => {})
+      const [sourceHash, targetHash, after] = await Promise.all([
+        hashFile(source),
+        hashFile(target),
+        fs.lstat(source),
+      ])
+      if (
+        sourceHash === targetHash
+        && before.size === after.size
+        && before.mtimeMs === after.mtimeMs
+      ) return
+      lastError = new Error(`Datei wurde während der Migration verändert: ${source}`)
+    } catch (error) {
+      lastError = error
+    }
+    await fs.rm(target, { force: true }).catch(() => {})
+    if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 50 * attempt))
+  }
+  throw lastError instanceof Error ? lastError : new Error(`Datei konnte nicht kopiert werden: ${source}`)
+}
+
+/** Copy without following symbolic links and verify every copied regular file. */
+async function copyAndVerifyTree(source: string, target: string): Promise<void> {
+  const stat = await fs.lstat(source)
+  if (stat.isSymbolicLink()) throw new Error(`Symbolischer Link kann nicht migriert werden: ${source}`)
+  if (stat.isDirectory()) {
+    await fs.mkdir(target, { recursive: false })
+    for (const entry of await fs.readdir(source)) {
+      await copyAndVerifyTree(path.join(source, entry), path.join(target, entry))
+    }
+    return
+  }
+  if (!stat.isFile()) throw new Error(`Nicht unterstützter Dateityp: ${source}`)
+  await copyStableFile(source, target)
+}
+
+async function copyUserDataTree(source: string, target: string, relative = ''): Promise<void> {
+  const stat = await fs.lstat(source)
+  if (stat.isSymbolicLink()) throw new Error(`Symbolischer Link kann nicht migriert werden: ${source}`)
+  if (stat.isDirectory()) {
+    if (relative) await fs.mkdir(target, { recursive: false, mode: stat.mode & 0o777 })
+    const entries = await fs.readdir(source)
+    for (const entry of entries) {
+      const childRelative = relative ? path.join(relative, entry) : entry
+      if (shouldSkipDataDirEntry(childRelative)) continue
+      await copyUserDataTree(path.join(source, entry), path.join(target, entry), childRelative)
+    }
+    return
+  }
+  if (!stat.isFile()) throw new Error(`Nicht unterstützter Dateityp: ${source}`)
+  await copyStableFile(source, target)
+}
+
+function remapInstallationDir(configured: string, oldDataDir: string, newDataDir: string): string {
+  if (!configured.trim()) return ''
+  const resolved = path.resolve(configured)
+  const relative = path.relative(path.resolve(oldDataDir), resolved)
+  if (relative === '') return path.resolve(newDataDir)
+  if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return configured
+  return path.join(path.resolve(newDataDir), relative)
+}
 
 class ConfigService {
-  private config: LauncherConfig = {
-    ...DEFAULT_CONFIG,
-    maxMemory: detectDefaultMaxMemory(),
+  private config: LauncherConfig = this.defaults()
+  private firstStart = false
+  private moving = false
+  private movingDataDir = false
+  private writeQueue: Promise<void> = Promise.resolve()
+  private legacyCredentials: LegacyCredential[] = []
+  private recovery: DataRecoveryState = { status: 'ok' }
+
+  private defaults(): LauncherConfig {
+    return { ...DEFAULT_CONFIG, maxMemory: detectDefaultMaxMemory() }
   }
 
-  /** True when config.json was absent at load time (first launch). */
-  private firstStart = false
-
-  /** Guards against concurrent moveInstances calls. */
-  private moving = false
-
-  /** Absolute path of config.json inside Electron's userData directory. */
-  private get configPath(): string {
+  getConfigPath(): string {
     return path.join(app.getPath('userData'), 'config.json')
   }
 
-  // ── Lifecycle ─────────────────────────────────────────────────────────────
+  getBackupPath(): string {
+    return `${this.getConfigPath()}.bak`
+  }
 
-  /**
-   * Hook for IPC handler registration.  The actual handlers live in router.ts;
-   * this method exists so the service follows the same lifecycle contract as
-   * every other service.
-   */
   registerHandlers(): void {
-    // Handlers are wired in router.ts
+    // Handlers are registered in router.ts.
   }
 
-  /**
-   * Read config.json from userData and merge with DEFAULT_CONFIG so that any
-   * keys added in a new launcher version are always present.
-   */
+  private async readValidated(filePath: string): Promise<LauncherConfig> {
+    const stat = await fs.lstat(filePath)
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 5 * 1024 * 1024) {
+      throw new Error('Configuration file is not a safe regular file')
+    }
+    const raw = await fs.readFile(filePath, 'utf8')
+    const parsed = parseLauncherConfig(JSON.parse(raw) as unknown, this.defaults())
+    this.legacyCredentials.push(...parsed.legacyCredentials)
+    return parsed.config
+  }
+
   async load(): Promise<void> {
-    const defaults: LauncherConfig = {
-      ...DEFAULT_CONFIG,
-      maxMemory: detectDefaultMaxMemory(),
-    }
-
-    let persisted: Partial<LauncherConfig> = {}
-
+    this.legacyCredentials = []
+    const configPath = this.getConfigPath()
     try {
-      const raw = await fs.readFile(this.configPath, 'utf8')
-      persisted = JSON.parse(raw) as Partial<LauncherConfig>
+      this.config = await this.readValidated(configPath)
       this.firstStart = false
-    } catch (err: unknown) {
-      // ENOENT → first run; any other error → treat as missing and log.
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-        logger.warn('[ConfigService] Failed to read config.json, using defaults:', err)
+      this.recovery = { status: 'ok' }
+      logger.info('[ConfigService] Config loaded and validated')
+      return
+    } catch (primaryError) {
+      const primaryMissing = (primaryError as NodeJS.ErrnoException).code === 'ENOENT'
+      if (!primaryMissing) logger.error('[ConfigService] Primary config is unreadable or invalid:', primaryError)
+      try {
+        this.config = await this.readValidated(this.getBackupPath())
+        this.firstStart = false
+        this.recovery = {
+          status: 'recovered-backup',
+          source: 'config',
+          message: 'Die beschädigte Konfiguration wurde aus der letzten Sicherung wiederhergestellt.',
+          brokenPath: configPath,
+          backupAvailable: true,
+        }
+        const quarantine = `${configPath}.corrupt-${Date.now()}`
+        await fs.rename(configPath, quarantine).catch(() => {})
+        // Do not rewrite a sanitized primary until legacy credentials have been
+        // durably imported into the secure store by startup orchestration.
+        logger.warn(`[ConfigService] Recovered config from backup; broken file kept as ${quarantine}`)
+        return
+      } catch (backupError) {
+        const backupMissing = (backupError as NodeJS.ErrnoException).code === 'ENOENT'
+        if (primaryMissing && backupMissing) {
+          this.config = this.defaults()
+          this.firstStart = true
+          this.recovery = { status: 'ok' }
+          logger.info('[ConfigService] First start - config.json and backup not found')
+          return
+        }
+        logger.error('[ConfigService] Config backup is unavailable or invalid:', backupError)
+        this.config = this.defaults()
+        this.firstStart = false
+        this.recovery = {
+          status: 'needs-recovery',
+          source: 'config',
+          message: 'Die Launcher-Konfiguration ist beschädigt. Es wurden keine Daten überschrieben.',
+          brokenPath: primaryMissing ? this.getBackupPath() : configPath,
+          backupAvailable: !backupMissing,
+        }
       }
-      this.firstStart = true
-    }
-
-    this.config = deepMerge(defaults, persisted)
-
-    if (this.firstStart) {
-      logger.info('[ConfigService] First start - config.json not found, using defaults')
-    } else {
-      logger.info('[ConfigService] Config loaded from disk')
     }
   }
 
-  /** Serialise the current config to config.json. */
+  private enqueueWrite(snapshot: LauncherConfig): Promise<void> {
+    const operation = this.writeQueue.then(async () => {
+      const parsed = parseLauncherConfig(snapshot, this.defaults()).config
+      const json = `${JSON.stringify(parsed, null, 2)}\n`
+      await atomicWriteFile(this.getConfigPath(), json)
+      await atomicWriteFile(this.getBackupPath(), json)
+    })
+    this.writeQueue = operation.catch(() => {})
+    return operation
+  }
+
   async save(): Promise<void> {
-    const dir = path.dirname(this.configPath)
-    await fs.mkdir(dir, { recursive: true })
-    await fs.writeFile(this.configPath, JSON.stringify(this.config, null, 2), 'utf8')
+    if (this.recovery.status === 'needs-recovery') {
+      throw new Error('RECOVERY_REQUIRED: Die beschädigte Konfiguration muss zuerst wiederhergestellt werden.')
+    }
+    return this.enqueueWrite(deepClone(this.config))
   }
 
-  // ── Accessors ─────────────────────────────────────────────────────────────
+  /** Wait until every queued write has settled. */
+  async flush(): Promise<void> {
+    await this.writeQueue
+  }
 
-  /** Returns a deep clone of the current config so callers cannot mutate state. */
   get(): LauncherConfig {
     return deepClone(this.config)
   }
 
-  /** Merge a partial config object into the current state (does NOT auto-save). */
-  merge(partial: Partial<LauncherConfig>): void {
-    this.config = deepMerge(this.config, partial)
-    // packConfigs uses replacement semantics — deepMerge can only add/update
-    // keys, never remove them, so an explicit pack deletion would be ignored.
-    if (partial.packConfigs !== undefined) {
-      this.config.packConfigs = { ...partial.packConfigs }
-      const names = Object.keys(this.config.packConfigs)
-      logger.debug(`[ConfigService] packConfigs replaced - ${names.length} override(s): ${names.join(', ') || '(none)'}`)
-    }
+  getPublic(): RendererConfig {
+    const { clientToken: _clientToken, ...publicConfig } = this.get()
+    return publicConfig
   }
 
-  /** Returns `true` when config.json was absent during `load()`. */
+  merge(partial: Partial<LauncherConfig>): void {
+    const merged = deepMerge(this.config, partial)
+    if (partial.packConfigs !== undefined) merged.packConfigs = { ...partial.packConfigs }
+    this.config = parseLauncherConfig(merged, this.defaults()).config
+  }
+
   isFirstStart(): boolean {
     return this.firstStart
   }
 
-  // ── Directory helpers ─────────────────────────────────────────────────────
+  getRecoveryState(): DataRecoveryState {
+    return { ...this.recovery }
+  }
 
-  /**
-   * Returns the root installation directory for modpack instances.
-   * Falls back to `<userData>/instances` when `installationDir` is empty.
-   */
-  getInstallDir(): string {
-    const configured = this.config.installationDir
-    if (configured && configured.trim().length > 0) {
-      return configured
+  setExternalRecovery(state: DataRecoveryState): void {
+    const priority: Record<NonNullable<DataRecoveryState['source']>, number> = {
+      'update-journal': 1,
+      config: 2,
+      pointer: 3,
     }
-    return path.join(app.getPath('userData'), 'instances')
+    if (this.recovery.status === 'ok') {
+      this.recovery = { ...state }
+      return
+    }
+    if (state.status !== 'needs-recovery') return
+    const currentPriority = this.recovery.source ? priority[this.recovery.source] : 0
+    const nextPriority = state.source ? priority[state.source] : 0
+    if (this.recovery.status !== 'needs-recovery' || nextPriority > currentPriority) {
+      this.recovery = { ...state }
+    }
   }
 
-  /**
-   * Returns the path `<installDir>/<name>`, creating it on disk if necessary.
-   */
+  acknowledgeExternalRecovery(source: DataRecoveryState['source']): void {
+    if (this.recovery.source === source) this.recovery = { status: 'ok' }
+  }
+
+  async resolveRecovery(action: DataRecoveryAction): Promise<void> {
+    if (action === 'locate-data') throw new Error('locate-data wird vom Bootstrap-Handler verarbeitet.')
+    if (action === 'accept-current') throw new Error('accept-current ist nur für ein Update-Protokoll erlaubt.')
+    if (action === 'restore-backup') {
+      this.config = await this.readValidated(this.getBackupPath())
+      this.recovery = { status: 'recovered-backup', source: 'config' }
+      // The router imports any legacy credentials before saving this sanitized config.
+      return
+    }
+    if (action === 'fresh-start') {
+      const timestamp = Date.now()
+      const brokenPath = this.recovery.brokenPath
+      if (brokenPath) await fs.rename(brokenPath, `${brokenPath}.corrupt-${timestamp}`).catch(() => {})
+      await fs.rename(this.getBackupPath(), `${this.getBackupPath()}.recovery-${timestamp}`).catch(() => {})
+      this.config = this.defaults()
+      this.firstStart = true
+      await this.enqueueWrite(this.config)
+      this.recovery = { status: 'ok' }
+    }
+  }
+
+  takeLegacyCredentials(): LegacyCredential[] {
+    const credentials = this.legacyCredentials
+    this.legacyCredentials = []
+    return credentials
+  }
+
+  // ── Explicit directory helpers ────────────────────────────────────────────
+
+  /** Root containing shared Minecraft resources plus instances/ and cache/. */
+  getResourceDir(): string {
+    const configured = this.config.installationDir.trim()
+    return configured || path.join(app.getPath('userData'), 'instances')
+  }
+
+  /** Compatibility alias used by XMCL resource installation. */
+  getInstallDir(): string {
+    return this.getResourceDir()
+  }
+
+  getInstancesDir(): string {
+    return path.join(this.getResourceDir(), 'instances')
+  }
+
+  getCacheDir(): string {
+    return path.join(this.getResourceDir(), 'cache')
+  }
+
+  getRuntimesDir(): string {
+    return path.join(app.getPath('userData'), 'runtimes')
+  }
+
+  async getInstanceDir(name: string, create = true): Promise<string> {
+    const safeName = assertPackName(name)
+    const root = path.resolve(this.getInstancesDir())
+    const directory = path.resolve(root, safeName)
+    if (path.dirname(directory) !== root) throw new Error('Modpack-Pfad verlässt den Instanzordner.')
+    if (create) {
+      await fs.mkdir(root, { recursive: true })
+      await assertContainedNoLinks(root, directory, { includeLeaf: true, label: 'Instanzpfad' })
+      await fs.mkdir(directory, { recursive: false }).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== 'EEXIST') throw error
+      })
+      const stat = await fs.lstat(directory)
+      if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Der Instanzpfad ist kein sicherer Ordner.')
+    } else {
+      try {
+        await assertContainedNoLinks(root, directory, { includeLeaf: true, label: 'Instanzpfad' })
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      }
+    }
+    return directory
+  }
+
+  /** Compatibility helper preserving the existing <resource>/<name> layout. */
   async getSaveSubDir(name: string): Promise<string> {
-    const dir = path.join(this.getInstallDir(), name)
-    await fs.mkdir(dir, { recursive: true })
-    return dir
+    const safeName = assertPackName(name)
+    const directory = path.join(this.getResourceDir(), safeName)
+    await fs.mkdir(directory, { recursive: true })
+    return directory
   }
 
-  // ── Token ─────────────────────────────────────────────────────────────────
-
-  /**
-   * Ensures a client token exists.  If `clientToken` is an empty string a
-   * random UUID is generated, written into the config, and persisted to disk.
-   */
   async generateClientToken(): Promise<void> {
     if (this.config.clientToken === '') {
       this.config.clientToken = crypto.randomUUID()
@@ -196,125 +443,227 @@ class ConfigService {
     }
   }
 
-  // ── Instance directory move ──────────────────────────────────────────────
+  // ── Launcher data-directory migration ─────────────────────────────────────
 
-  /**
-   * Move modpack instances to a new directory.
-   *
-   * 1. Validates the target path
-   * 2. Tests write access
-   * 3. Checks for name collisions in the target
-   * 4. Two-phase move: copies everything first, then deletes originals
-   * 5. Updates `installationDir` and saves config
-   *
-   * Returns `{ success: true }` or `{ success: false, error: string }`.
-   * No app restart required.
-   */
-  async moveInstances(targetDir: string): Promise<{ success: boolean; error?: string }> {
-    if (this.moving) {
-      logger.warn('[ConfigService] moveInstances called while already in progress')
-      return { success: false, error: 'Verschiebung laeuft bereits.' }
+  isDataDirMigrationActive(): boolean {
+    return this.movingDataDir
+  }
+
+  isStorageMigrationActive(): boolean {
+    return this.movingDataDir || this.moving
+  }
+
+  async migrateDataDir(
+    targetDir: string,
+    flushExternal?: () => Promise<void>,
+  ): Promise<DataDirMigrationResult> {
+    if (this.movingDataDir || this.moving) {
+      return { success: false, error: 'Eine Speicherort-Migration läuft bereits.' }
     }
+    this.movingDataDir = true
+    try {
+      await flushExternal?.()
+      return await this.doMigrateDataDir(targetDir)
+    } finally {
+      this.movingDataDir = false
+    }
+  }
+
+  private async doMigrateDataDir(targetDir: string): Promise<DataDirMigrationResult> {
+    if (this.recovery.status === 'needs-recovery') {
+      return { success: false, error: 'Vor der Migration muss die Datenwiederherstellung abgeschlossen werden.' }
+    }
+    if (!path.isAbsolute(targetDir)) {
+      return { success: false, error: 'Der Zielordner muss ein absoluter Pfad sein.' }
+    }
+
+    const currentDir = path.resolve(app.getPath('userData'))
+    const resolvedTarget = path.resolve(targetDir)
+    const validation = validateMigrationTarget(currentDir, resolvedTarget)
+    if (!validation.ok) {
+      const messages: Record<Exclude<MigrationValidation, { ok: true }>['error'], string> = {
+        'already-current': 'Das ist bereits der aktuelle Speicherort.',
+        nested: 'Der Zielordner darf nicht im aktuellen Datenordner liegen (oder umgekehrt).',
+        empty: 'Bitte wähle einen Ordner.',
+      }
+      return { success: false, error: messages[validation.error] }
+    }
+
+    let stagingDir: string | null = null
+    let promoted = false
+    try {
+      await this.flush()
+      const sourceStat = await fs.lstat(currentDir)
+      if (!sourceStat.isDirectory() || sourceStat.isSymbolicLink()) {
+        return { success: false, error: 'Der aktuelle Datenordner ist nicht sicher.' }
+      }
+
+      await fs.mkdir(resolvedTarget, { recursive: true })
+      const targetStat = await fs.lstat(resolvedTarget)
+      if (!targetStat.isDirectory() || targetStat.isSymbolicLink()) {
+        return { success: false, error: 'Der Zielordner darf kein symbolischer Link oder eine Junction sein.' }
+      }
+      if ((await fs.readdir(resolvedTarget)).length > 0) {
+        return { success: false, error: 'Der Zielordner muss leer sein.' }
+      }
+      const probe = path.join(resolvedTarget, `.myftb-write-test-${crypto.randomUUID()}`)
+      await fs.writeFile(probe, 'test', { flag: 'wx', mode: 0o600 })
+      await fs.rm(probe)
+
+      const parent = path.dirname(resolvedTarget)
+      stagingDir = await fs.mkdtemp(path.join(parent, `.${path.basename(resolvedTarget)}.myftb-staging-`))
+      await copyUserDataTree(currentDir, stagingDir)
+
+      // Keep external resource directories unchanged. Paths below userData move
+      // with the new root; an empty value continues to use the default layout.
+      const migratedConfig = deepClone(this.config)
+      migratedConfig.installationDir = remapInstallationDir(
+        migratedConfig.installationDir,
+        currentDir,
+        resolvedTarget,
+      )
+      const parsed = parseLauncherConfig(migratedConfig, this.defaults()).config
+      const configJson = `${JSON.stringify(parsed, null, 2)}\n`
+      await atomicWriteFile(path.join(stagingDir, 'config.json'), configJson)
+      await atomicWriteFile(path.join(stagingDir, 'config.json.bak'), configJson)
+      await atomicWriteFile(path.join(stagingDir, '.myftb-data-migration.json'), `${JSON.stringify({
+        version: 1,
+        source: currentDir,
+        createdAt: new Date().toISOString(),
+      }, null, 2)}\n`)
+
+      // Revalidate immediately before the atomic same-filesystem promotion.
+      const finalStat = await fs.lstat(resolvedTarget)
+      if (!finalStat.isDirectory() || finalStat.isSymbolicLink() || (await fs.readdir(resolvedTarget)).length > 0) {
+        throw new Error('Der Zielordner wurde während der Migration verändert.')
+      }
+      await fs.rmdir(resolvedTarget)
+      await fs.rename(stagingDir, resolvedTarget)
+      promoted = true
+      stagingDir = null
+
+      // The pointer is the final commit record. The old tree is deliberately
+      // retained so a failed restart can always be rolled back manually.
+      writeDataDirPointer(resolvedTarget)
+      logger.info(`[ConfigService] Data directory copied and committed: ${currentDir} -> ${resolvedTarget}`)
+      return { success: true }
+    } catch (error) {
+      logger.error('[ConfigService] Data-directory migration failed:', error)
+      return {
+        success: false,
+        error: promoted
+          ? 'Die Daten wurden vollständig kopiert, aber der Datenzeiger konnte nicht sicher gespeichert werden. Der alte Ordner wurde beibehalten.'
+          : 'Die Launcher-Daten konnten nicht vollständig kopiert und geprüft werden.',
+      }
+    } finally {
+      if (stagingDir) await fs.rm(stagingDir, { recursive: true, force: true }).catch(() => {})
+    }
+  }
+
+  // ── Instance-directory migration ──────────────────────────────────────────
+
+  async moveInstances(targetDir: string): Promise<{ success: boolean; error?: string }> {
+    if (this.moving || this.movingDataDir) return { success: false, error: 'Verschiebung läuft bereits.' }
     this.moving = true
     try {
-      return await this._doMoveInstances(targetDir)
+      return await this.doMoveInstances(targetDir)
     } finally {
       this.moving = false
     }
   }
 
-  private async _doMoveInstances(
-    targetDir: string,
-  ): Promise<{ success: boolean; error?: string }> {
-    const currentDir = this.getInstallDir()
-    logger.info(`[ConfigService] Move instances requested: ${currentDir} -> ${targetDir}`)
-
-    const validation = validateMigrationTarget(currentDir, targetDir)
+  private async doMoveInstances(targetDir: string): Promise<{ success: boolean; error?: string }> {
+    const currentDir = this.getResourceDir()
+    if (!path.isAbsolute(targetDir)) {
+      return { success: false, error: 'Der Zielordner muss ein absoluter Pfad sein.' }
+    }
+    const resolvedTarget = path.resolve(targetDir)
+    const validation = validateMigrationTarget(currentDir, resolvedTarget)
     if (!validation.ok) {
-      logger.warn(`[ConfigService] Move validation failed: ${validation.error} (target: ${targetDir})`)
-      const messages: Record<
-        Exclude<MigrationValidation, { ok: true }>['error'],
-        string
-      > = {
+      const messages: Record<Exclude<MigrationValidation, { ok: true }>['error'], string> = {
         'already-current': 'Das ist bereits der aktuelle Speicherort.',
-        nested: 'Der Zielordner darf nicht innerhalb des aktuellen Speicherorts liegen (oder umgekehrt).',
-        empty: 'Bitte waehle einen Ordner.',
+        nested: 'Der Zielordner darf nicht im aktuellen Speicherort liegen (oder umgekehrt).',
+        empty: 'Bitte wähle einen Ordner.',
       }
       return { success: false, error: messages[validation.error] }
     }
 
-    // Ensure target exists and is writable
     try {
-      await fs.mkdir(targetDir, { recursive: true })
-      const testFile = path.join(targetDir, '.myftb-write-test')
-      await fs.writeFile(testFile, 'test', 'utf8')
-      await fs.unlink(testFile)
+      await fs.mkdir(resolvedTarget, { recursive: true })
+      const targetStat = await fs.lstat(resolvedTarget)
+      if (!targetStat.isDirectory() || targetStat.isSymbolicLink()) {
+        return { success: false, error: 'Der Zielordner darf kein symbolischer Link oder eine Junction sein.' }
+      }
+      const currentStat = await fs.lstat(currentDir).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return null
+        throw error
+      })
+      if (currentStat && (!currentStat.isDirectory() || currentStat.isSymbolicLink())) {
+        return { success: false, error: 'Der aktuelle Speicherort ist kein sicherer Ordner.' }
+      }
+      const targetEntries = await fs.readdir(resolvedTarget)
+      if (targetEntries.length > 0) {
+        return { success: false, error: 'Der Zielordner muss leer sein.' }
+      }
+      const testPath = path.join(resolvedTarget, `.myftb-write-test-${crypto.randomUUID()}`)
+      await fs.writeFile(testPath, 'test', { flag: 'wx', mode: 0o600 })
+      await fs.rm(testPath)
     } catch {
-      logger.warn(`[ConfigService] Target directory not writable: ${targetDir}`)
       return { success: false, error: 'Der Zielordner ist nicht beschreibbar.' }
     }
 
-    // Read current entries
     let entries: string[]
     try {
       entries = await fs.readdir(currentDir)
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-        logger.warn(`[ConfigService] Current install dir does not exist, treating as empty: ${currentDir}`)
-        entries = []
-      } else {
-        logger.error('[ConfigService] Failed to read current install dir:', err)
-        return { success: false, error: 'Fehler beim Lesen des aktuellen Speicherorts.' }
-      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') entries = []
+      else return { success: false, error: 'Der aktuelle Speicherort konnte nicht gelesen werden.' }
     }
 
-    // Check for name collisions in target
     for (const entry of entries) {
       try {
-        await fs.access(path.join(targetDir, entry))
-        logger.warn(`[ConfigService] Name collision in target: "${entry}" already exists in ${targetDir}`)
-        return { success: false, error: `"${entry}" existiert bereits im Zielordner.` }
-      } catch {
-        // Does not exist - good
-      }
-    }
-
-    // Phase 1: Copy everything to target
-    // (algorithm mirrored in src/tests/move-instances.test.ts - keep in sync)
-    const copied: string[] = []
-    for (const entry of entries) {
-      const src = path.join(currentDir, entry)
-      const dest = path.join(targetDir, entry)
-      try {
-        await fs.cp(src, dest, { recursive: true })
-        copied.push(entry)
-      } catch (err) {
-        // Rollback: remove partially-copied current entry + already-copied entries
-        await fs.rm(dest, { recursive: true, force: true }).catch(() => {})
-        for (const name of copied) {
-          await fs.rm(path.join(targetDir, name), { recursive: true, force: true }).catch(() => {})
+        await fs.lstat(path.join(resolvedTarget, entry))
+        return { success: false, error: `„${entry}“ existiert bereits im Zielordner.` }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+          return { success: false, error: `Der Zielordner konnte nicht geprüft werden: „${entry}“.` }
         }
-        logger.error(`[ConfigService] Move failed at "${entry}", rolled back ${copied.length} entries`, err)
-        return { success: false, error: `Fehler beim Verschieben von "${entry}".` }
       }
     }
 
-    // Phase 2: All copies succeeded - delete originals
-    for (const entry of copied) {
-      await fs.rm(path.join(currentDir, entry), { recursive: true, force: true }).catch((err) => {
-        logger.warn(`[ConfigService] Failed to remove original after move: ${entry}`, err)
-      })
+    const copied: string[] = []
+    try {
+      for (const entry of entries) {
+        const destination = path.join(resolvedTarget, entry)
+        try {
+          await copyAndVerifyTree(path.join(currentDir, entry), destination)
+          copied.push(entry)
+        } catch (error) {
+          await fs.rm(destination, { recursive: true, force: true }).catch(() => {})
+          throw error
+        }
+      }
+      const previousDir = this.config.installationDir
+      this.config.installationDir = resolvedTarget
+      try {
+        await this.save()
+      } catch (error) {
+        this.config.installationDir = previousDir
+        throw error
+      }
+    } catch (error) {
+      for (const entry of copied) {
+        await fs.rm(path.join(resolvedTarget, entry), { recursive: true, force: true }).catch(() => {})
+      }
+      logger.error('[ConfigService] Verified instance migration failed:', error)
+      return { success: false, error: 'Die Daten konnten nicht vollständig kopiert und geprüft werden.' }
     }
 
-    // Update config and persist
-    this.config.installationDir = targetDir
-    await this.save()
-
-    logger.info(`[ConfigService] Instances moved: ${currentDir} -> ${targetDir} (${copied.length} entries)`)
+    logger.info(
+      `[ConfigService] Instances copied and verified: ${currentDir} -> ${resolvedTarget}; old data retained for rollback`,
+    )
     return { success: true }
   }
 }
-
-// ─── Singleton export ─────────────────────────────────────────────────────────
 
 export const configService = new ConfigService()

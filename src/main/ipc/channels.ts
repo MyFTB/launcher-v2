@@ -48,6 +48,12 @@ export const IpcChannels = {
   INSTALL_GET_PACK_FEATURES: 'install:get-pack-features',
   /** Renderer→Main: Change the feature selection of an installed pack */
   INSTALL_CHANGE_FEATURES: 'install:change-features',
+  /** Renderer→Main: Verify all managed files of an installed pack */
+  INSTALL_VERIFY_PACK: 'install:verify-pack',
+  /** Renderer→Main: Repair missing/corrupt managed files */
+  INSTALL_REPAIR_PACK: 'install:repair-pack',
+  /** Renderer→Main: Retry the last failed install/repair operation */
+  INSTALL_RETRY_FAILED: 'install:retry-failed',
   /** Main→Renderer push: feature-change progress */
   INSTALL_FEATURES_CHANGE_PROGRESS: 'install:features-change-progress',
   /** Main→Renderer push: feature-change finished */
@@ -58,7 +64,9 @@ export const IpcChannels = {
   LAUNCH_START: 'launch:start',
   /** Renderer→Main: Kill running Minecraft process */
   LAUNCH_KILL: 'launch:kill',
-  /** Renderer→Main: Get current log buffer */
+  /** Renderer→Main: Get the current launch-session snapshot */
+  LAUNCH_GET_SESSIONS: 'launch:get-sessions',
+  /** Renderer→Main: Get one session's log buffer */
   LAUNCH_GET_LOG: 'launch:get-log',
   /** Renderer→Main: Open modpack instance folder */
   LAUNCH_OPEN_FOLDER: 'launch:open-folder',
@@ -74,6 +82,10 @@ export const IpcChannels = {
   LAUNCH_STATE: 'launch:state',
   /** Main→Renderer push: Minecraft stdout/stderr line */
   LAUNCH_LOG: 'launch:log',
+  /** Main→detached-console push: select a requested launch session */
+  LAUNCH_CONSOLE_SELECT: 'launch:console-select',
+  /** Main→Renderer push: prune an old completed session */
+  LAUNCH_SESSION_REMOVED: 'launch:session-removed',
 
   // ── Config ───────────────────────────────────────────────────
   /** Renderer→Main: Get current launcher config */
@@ -84,14 +96,28 @@ export const IpcChannels = {
   CONFIG_PICK_DIR: 'config:pick-dir',
   /** Renderer→Main: Open launcher log file directory */
   CONFIG_OPEN_LOGS: 'config:open-logs',
+  /** Renderer→Main: Copy all launcher data to a new directory and restart */
+  CONFIG_CHANGE_DATA_DIR: 'config:change-data-dir',
   /** Renderer→Main: Move modpack instances to a new directory */
   CONFIG_MOVE_INSTANCES: 'config:move-instances',
+  /** Renderer→Main: Read data/config recovery status */
+  CONFIG_GET_RECOVERY: 'config:get-recovery',
+  /** Renderer→Main: Resolve an interrupted/corrupt data state */
+  CONFIG_RESOLVE_RECOVERY: 'config:resolve-recovery',
 
   // ── System ───────────────────────────────────────────────────
   /** Renderer→Main: Get system info (platform, memory, etc.) */
   SYSTEM_INFO: 'system:info',
   /** Renderer→Main: Open external URL in default browser */
   SYSTEM_OPEN_URL: 'system:open-url',
+
+  // ── Window controls ─────────────────────────────────────────
+  WINDOW_MINIMIZE: 'window:minimize',
+  WINDOW_MAXIMIZE: 'window:maximize',
+  WINDOW_CLOSE: 'window:close',
+  WINDOW_IS_MAXIMIZED: 'window:is-maximized',
+  WINDOW_OPEN_CONSOLE: 'window:open-console',
+  WINDOW_MAXIMIZED_CHANGED: 'window:maximized-changed',
 
   // ── Internal ─────────────────────────────────────────────────
   /** Renderer→Main: Renderer is ready (first-start detection, launch-pack arg) */

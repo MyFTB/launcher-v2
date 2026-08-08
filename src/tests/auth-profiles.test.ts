@@ -21,16 +21,12 @@ const mockProfile: LauncherProfile = {
   provider: 'microsoft',
   uuid: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
   lastKnownUsername: 'TestUser',
-  minecraftAccessToken: 'mc-token-abc',
-  oauthRefreshToken: 'oauth-refresh-xyz',
 }
 
 const mockProfile2: LauncherProfile = {
   provider: 'microsoft',
   uuid: 'ffffffff-0000-1111-2222-333333333333',
   lastKnownUsername: 'SecondUser',
-  minecraftAccessToken: 'mc-token-def',
-  oauthRefreshToken: 'oauth-refresh-uvw',
 }
 
 describe('auth profile state helpers', () => {

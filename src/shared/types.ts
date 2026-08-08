@@ -1,9 +1,8 @@
 // ============================================================
-// MyFTB Launcher v2 — Shared Types
-// Used by both Electron main process and React renderer.
+// MyFTB Launcher v2 — shared data and IPC contracts
 // ============================================================
 
-// ─── Modpack ────────────────────────────────────────────────
+// ─── Modpacks ───────────────────────────────────────────────────────────────
 
 export interface ModpackManifestReference {
   name: string
@@ -15,12 +14,12 @@ export interface ModpackManifestReference {
 }
 
 export interface FeatureCondition {
-  /** 'requireAny' | 'requireAll' */
   if: 'requireAny' | 'requireAll'
   features: string[]
 }
 
 export interface FileTask {
+  /** Strong hexadecimal digest. SHA-256 is required for external hosts. */
   hash: string
   location: string
   to: string
@@ -31,7 +30,6 @@ export interface FileTask {
 export interface Feature {
   name: string
   description: string
-  /** Whether this feature is selected by default */
   default?: boolean
 }
 
@@ -44,9 +42,7 @@ export interface MinecraftLibraryArtifact {
 
 export interface MinecraftLibrary {
   name: string
-  downloads?: {
-    artifact?: MinecraftLibraryArtifact
-  }
+  downloads?: { artifact?: MinecraftLibraryArtifact }
   rules?: Array<{
     action: 'allow' | 'disallow'
     os?: { name: string }
@@ -73,38 +69,43 @@ export interface MinecraftVersionManifest {
 
 export interface ModpackManifest extends ModpackManifestReference {
   versionManifest: MinecraftVersionManifest
-  /** Per-platform JVM/game launch args, keyed by platform or '*' */
   launch?: Record<string, string[]>
-  /** Custom JRE identifier, fetched from launcher.myftb.de/{runtime}.json */
   runtime?: string
   features?: Feature[]
   tasks?: FileTask[]
 }
 
-// ─── Auth / Profiles ────────────────────────────────────────
+// ─── Authentication ─────────────────────────────────────────────────────────
 
 export type AuthProvider = 'microsoft'
 
-export interface LauncherProfile {
+/** Renderer-safe account metadata. Tokens are stored only in the main process. */
+export interface AuthProfileSummary {
   provider: AuthProvider
   uuid: string
   lastKnownUsername: string
-  /** Minecraft access token (short-lived) */
+  minecraftTokenExpiresAt?: number
+  lastAuthenticatedAt?: number
+}
+
+/** Compatibility name used by existing renderer components. It never has tokens. */
+export type LauncherProfile = AuthProfileSummary
+
+export interface AuthenticatedProfile extends AuthProfileSummary {
   minecraftAccessToken: string
-  /** Microsoft OAuth refresh token (long-lived) */
   oauthRefreshToken: string
-  /** Xbox user ID for skin/cape lookup */
-  xuid?: string
 }
 
 export interface LauncherProfileStore {
-  profiles: LauncherProfile[]
+  profiles: AuthProfileSummary[]
   selectedProfileUuid?: string
 }
 
-// ─── Launcher Config ─────────────────────────────────────────
+// ─── Configuration and recovery ─────────────────────────────────────────────
 
-/** Per-modpack memory and JVM argument overrides. Unset fields fall back to global config. */
+export type UpdateChannel = 'stable' | 'experimental'
+export const CONFIG_VERSION = 2
+
 export interface PackConfig {
   minMemory?: number
   maxMemory?: number
@@ -112,32 +113,42 @@ export interface PackConfig {
 }
 
 export interface LauncherConfig {
-  /** Random UUID identifying this client installation */
+  version: number
+  /** Random UUID identifying this launcher installation. Main-process only. */
   clientToken: string
-  /** Extra JVM arguments string */
   jvmArgs: string
   maxMemory: number
   minMemory: number
   gameWidth: number
   gameHeight: number
-  /** Server pack key for authenticated pack lists */
   packKey: string
-  /** Root directory where modpack instances are installed */
   installationDir: string
-  /** Whether myftb:// deep-link / webstart is allowed */
   allowWebstart: boolean
-  /** Up to 3 recently played pack names */
   lastPlayedPacks: string[]
-  /** Key-value map for AutoConfig feature state */
   autoConfigs: Record<string, string>
-  /** Per-pack memory and JVM argument overrides, keyed by pack name */
   packConfigs: Record<string, PackConfig>
   profileStore: LauncherProfileStore
-  /** Update channel: stable = releases only, experimental = prereleases included */
-  updateChannel: 'stable' | 'experimental'
+  updateChannel: UpdateChannel
 }
 
+/** The renderer may only mutate user-editable settings. */
+export type RendererConfigPatch = Partial<Pick<
+  LauncherConfig,
+  | 'jvmArgs'
+  | 'maxMemory'
+  | 'minMemory'
+  | 'gameWidth'
+  | 'gameHeight'
+  | 'packKey'
+  | 'allowWebstart'
+  | 'packConfigs'
+>>
+
+/** Renderer-facing config. It intentionally contains no credentials/client token. */
+export type RendererConfig = Omit<LauncherConfig, 'clientToken'>
+
 export const DEFAULT_CONFIG: LauncherConfig = {
+  version: CONFIG_VERSION,
   clientToken: '',
   jvmArgs: '',
   maxMemory: 4096,
@@ -154,72 +165,191 @@ export const DEFAULT_CONFIG: LauncherConfig = {
   updateChannel: 'stable',
 }
 
-// ─── IPC Payload Types ───────────────────────────────────────
+export type DataRecoveryStatus = 'ok' | 'recovered-backup' | 'needs-recovery'
+export interface DataRecoveryState {
+  status: DataRecoveryStatus
+  source?: 'config' | 'pointer' | 'update-journal'
+  message?: string
+  brokenPath?: string
+  backupAvailable?: boolean
+}
 
-// Auth
-export interface AuthStartMicrosoftPayload { /* no input needed */ }
-export interface AuthLogoutPayload { /* no input needed */ }
+export type DataRecoveryAction = 'restore-backup' | 'locate-data' | 'fresh-start' | 'accept-current'
+
+// ─── Structured IPC errors ──────────────────────────────────────────────────
+
+export type IpcErrorCode =
+  | 'UNAUTHORIZED'
+  | 'INVALID_PAYLOAD'
+  | 'NOT_FOUND'
+  | 'CONFLICT'
+  | 'CANCELLED'
+  | 'NETWORK_TEMPORARY'
+  | 'AUTH_REJECTED'
+  | 'RECOVERY_REQUIRED'
+  | 'IO_ERROR'
+  | 'INTERNAL'
+
+export interface IpcErrorDto {
+  code: IpcErrorCode
+  message: string
+}
+
+export type IpcResponse<T> =
+  | { ok: true; value: T }
+  | { ok: false; error: IpcErrorDto }
+
+// ─── Authentication IPC ─────────────────────────────────────────────────────
+
 export interface AuthSwitchProfilePayload { uuid: string }
-export interface AuthProfilesUpdatedEvent { profiles: LauncherProfile[]; selectedUuid?: string }
-export interface AuthLoginErrorEvent { error: string }
+export interface AuthProfilesUpdatedEvent {
+  profiles: AuthProfileSummary[]
+  selectedUuid?: string
+}
+export interface AuthLoginErrorEvent {
+  error: string
+  code?: IpcErrorCode
+}
 
-// Packs
-export interface PacksGetRemotePayload { /* no input needed */ }
+// ─── Packs IPC ──────────────────────────────────────────────────────────────
+
 export interface PacksGetManifestPayload { location: string }
 export interface PacksGetLogoPayload { location: string; name: string; logo?: string }
 export interface PacksGetLogoResult { dataUrl: string | null }
 
-// Install
+// ─── Installation and downloads ─────────────────────────────────────────────
+
+export type DownloadFailureKind =
+  | 'dns'
+  | 'tls'
+  | 'connection'
+  | 'timeout'
+  | 'http'
+  | 'checksum'
+  | 'cancelled'
+  | 'permission'
+  | 'disk'
+  | 'invalid-source'
+  | 'unknown'
+
+export interface DownloadFailure {
+  task: string
+  url?: string
+  host?: string
+  kind: DownloadFailureKind
+  message: string
+  retryable: boolean
+  attempts: number
+  bytesReceived?: number
+  status?: number
+}
+
 export interface InstallModpackPayload {
   reference: ModpackManifestReference
   selectedFeatures?: string[]
 }
 export interface InstallProgressEvent {
+  operationId?: string
+  packName?: string
   total: number
   finished: number
   failed: number
   currentFile?: string
 }
-export interface InstallCompleteEvent { success: boolean; error?: string }
-export interface InstallNeedsFeaturesEvent { features: Feature[] }
+export interface InstalledPackSummary extends ModpackManifestReference {
+  hasFeatures: boolean
+}
 
-// Feature change (post-install reconfiguration)
+export interface InstallResult {
+  success: boolean
+  packName: string
+  operationId?: string
+  failures: DownloadFailure[]
+  error?: string
+  cancelled?: boolean
+}
+export interface InstallCompleteEvent extends InstallResult {}
+export interface InstallNeedsFeaturesEvent { features: Feature[] }
 export interface PackFeaturesResult { features: Feature[]; selected: string[] }
 export interface ChangeFeaturesPayload { packName: string; selectedFeatures: string[] }
 export interface ChangeFeaturesResult { success: boolean; error?: string }
+export interface VerifyPackPayload { packName: string }
+export interface VerifyPackResult {
+  packName: string
+  valid: boolean
+  missing: string[]
+  corrupt: string[]
+}
+export interface RepairPackPayload { packName: string }
+export interface RetryFailedPayload { packName: string }
 
-// Launch
+// ─── Launch sessions ────────────────────────────────────────────────────────
+
+export type LaunchState = 'launching' | 'running' | 'closed' | 'crashed'
+export interface LaunchSession {
+  id: string
+  packName: string
+  packTitle: string
+  pid?: number
+  /** Hash of OS process start metadata; prevents unsafe PID-reuse restoration. */
+  processIdentity?: string
+  state: LaunchState
+  startedAt: number
+  updatedAt: number
+  exitCode?: number
+  detached?: boolean
+  error?: string
+}
 export interface LaunchStartPayload { packName: string }
+export interface LaunchStartResult { session: LaunchSession }
+export interface LaunchSessionPayload { sessionId: string }
+export interface LaunchStateEvent { session: LaunchSession }
+export interface LaunchLogEvent { sessionId: string; packName: string; line: string }
+export interface LaunchConsoleSelectEvent { sessionId: string }
+export interface LaunchSessionRemovedEvent { sessionId: string }
 export interface LaunchOpenFolderPayload { packName: string }
 export interface LaunchDeletePayload { packName: string }
 export interface LaunchCreateShortcutPayload { packName: string }
-export type LaunchState = 'launching' | 'running' | 'closed' | 'crashed'
-export interface LaunchStateEvent { state: LaunchState; exitCode?: number }
-export interface LaunchLogEvent { line: string }
 
-// Config
+// ─── Configuration/system IPC ───────────────────────────────────────────────
+
 export interface ConfigPickDirResult { directory: string | null }
+export interface DataDirMigrationResult {
+  success: boolean
+  error?: string
+  cancelled?: boolean
+}
+export interface ConfigResolveRecoveryPayload {
+  action: DataRecoveryAction
+  dataDir?: string
+}
 
-// System info
 export interface SystemInfoResult {
   platform: 'win32' | 'darwin' | 'linux'
   totalMemoryMb: number
   arch: string
   launcherVersion: string
-  /** Current userData directory path */
+  appId: string
   dataDir: string
-  /** Resolved modpack instances directory path */
   installDir: string
+  instancesDir: string
+  cacheDir: string
+  runtimesDir: string
+  pointerPath: string
+  configPath: string
+  configBackupPath: string
+  secureCredentialPersistence: boolean
 }
 
-// Paste / crash
 export interface UploadLogResult { url: string }
 
-// Updates
+// ─── Updates ────────────────────────────────────────────────────────────────
+
 export interface UpdateAvailableEvent {
   version: string
   releaseNotes: string | null
   releaseDate: string
+  channel: UpdateChannel
 }
 export interface UpdateProgressEvent {
   percent: number
@@ -227,10 +357,11 @@ export interface UpdateProgressEvent {
   transferred: number
   total: number
 }
-export interface UpdateDownloadedEvent { version: string }
+export interface UpdateDownloadedEvent { version: string; channel: UpdateChannel }
 export interface UpdateErrorEvent { message: string }
 
-// Posts (myftb.de blog)
+// ─── Posts ──────────────────────────────────────────────────────────────────
+
 export interface Post {
   title: string
   url: string
@@ -241,64 +372,89 @@ export interface Post {
   category?: string
 }
 
-// ─── Electron API (exposed via preload) ──────────────────────
+// ─── Window and push events ─────────────────────────────────────────────────
 
-/** Shape of window.electronAPI exposed by preload.ts */
+export interface WindowMaximizedEvent { maximized: boolean }
+
+export type PushChannel =
+  | 'auth:profiles-updated'
+  | 'auth:login-error'
+  | 'install:progress'
+  | 'install:complete'
+  | 'install:needs-features'
+  | 'install:features-change-progress'
+  | 'install:features-change-complete'
+  | 'launch:state'
+  | 'launch:log'
+  | 'launch:console-select'
+  | 'launch:session-removed'
+  | 'internal:welcome-message'
+  | 'internal:launch-pack'
+  | 'update:available'
+  | 'update:not-available'
+  | 'update:progress'
+  | 'update:downloaded'
+  | 'update:error'
+  | 'window:maximized-changed'
+
+// ─── Electron API exposed by preload ────────────────────────────────────────
+
 export interface ElectronAPI {
-  // Auth
+  readonly platform: 'win32' | 'darwin' | 'linux'
+
   authStartMicrosoft(): Promise<void>
   authLogout(): Promise<void>
   authSwitchProfile(uuid: string): Promise<void>
 
-  // Packs
   packsGetRemote(): Promise<ModpackManifestReference[]>
-  packsGetManifest(location: string): Promise<ModpackManifest>
+  packsGetManifest(location: string): Promise<ModpackManifest | null>
   packsGetPosts(): Promise<Post[]>
   packsGetLogo(location: string, name: string, logo?: string): Promise<string | null>
   packsReload(): Promise<void>
 
-  // Install
-  installModpack(reference: ModpackManifestReference, selectedFeatures?: string[]): Promise<void>
+  installModpack(reference: ModpackManifestReference, selectedFeatures?: string[]): Promise<InstallResult>
   installCancel(): Promise<void>
-  installGetInstalled(): Promise<{ name: string; version: string; hasFeatures: boolean }[]>
+  installGetInstalled(): Promise<InstalledPackSummary[]>
   installGetPackFeatures(packName: string): Promise<PackFeaturesResult>
-  installChangeFeatures(packName: string, selectedFeatures: string[]): Promise<void>
+  installChangeFeatures(packName: string, selectedFeatures: string[]): Promise<ChangeFeaturesResult>
+  installVerifyPack(packName: string): Promise<VerifyPackResult>
+  installRepairPack(packName: string): Promise<InstallResult>
+  installRetryFailed(packName: string): Promise<InstallResult>
 
-  // Launch
-  launchStart(packName: string): Promise<void>
-  launchKill(): Promise<void>
-  launchGetLog(): Promise<string>
+  launchStart(packName: string): Promise<LaunchStartResult>
+  launchKill(sessionId: string): Promise<void>
+  launchGetSessions(): Promise<LaunchSession[]>
+  launchGetLog(sessionId: string): Promise<string>
   launchOpenFolder(packName: string): Promise<void>
   launchDeletePack(packName: string): Promise<{ success: boolean; error?: string }>
   launchCreateShortcut(packName: string): Promise<void>
   launchUploadCrash(packName: string): Promise<string>
-  launchUploadLog(): Promise<string>
+  launchUploadLog(sessionId: string): Promise<string>
 
-  // Config
-  configGet(): Promise<LauncherConfig>
-  configSave(config: Partial<LauncherConfig>): Promise<void>
+  configGet(): Promise<RendererConfig>
+  configSave(config: RendererConfigPatch): Promise<void>
   configPickDir(): Promise<string | null>
   configOpenLogs(): Promise<void>
+  configChangeDataDir(): Promise<DataDirMigrationResult>
   configMoveInstances(targetDir: string): Promise<{ success: boolean; error?: string }>
+  configGetRecovery(): Promise<DataRecoveryState>
+  configResolveRecovery(action: DataRecoveryAction, dataDir?: string): Promise<void>
 
-  // System
   systemInfo(): Promise<SystemInfoResult>
   systemOpenUrl(url: string): Promise<void>
 
-  // Window controls
   windowMinimize(): void
   windowMaximize(): void
   windowClose(): void
-  windowOpenConsole(): Promise<void>
+  windowIsMaximized(): Promise<boolean>
+  windowOpenConsole(sessionId?: string): Promise<void>
 
-  // Updates
   updateCheck(): Promise<void>
   updateDownload(): Promise<void>
-  updateInstall(): void
-  updateSetChannel(channel: 'stable' | 'experimental'): void
+  updateInstall(): Promise<void>
+  updateSetChannel(channel: UpdateChannel): Promise<void>
 
-  // Push event listeners (renderer side)
-  on(channel: string, listener: (...args: unknown[]) => void): () => void
+  on(channel: PushChannel, listener: (...args: unknown[]) => void): () => void
 }
 
 declare global {
