@@ -1,26 +1,6 @@
-# Release workflow — triggered when a v* tag is pushed (e.g. v2.0.0).
-# Each platform builds its signed installer in parallel, then a final job
-# creates the GitHub Release and attaches all artifacts.
-#
-# Required repository secrets:
-#
-#   GH_TOKEN                    — GitHub token used by electron-builder to
-#                                 upload artifacts to GitHub Releases.
-#                                 Use the built-in github.token or a PAT with
-#                                 contents:write + releases:write scopes.
-#
-#   Windows code signing (optional — build succeeds without these):
-#   WIN_CSC_LINK                — Base64-encoded .pfx certificate, or a URL to
-#                                 the certificate file.
-#   WIN_CSC_KEY_PASSWORD        — Password for the Windows signing certificate.
-#
-#   macOS code signing (required for notarization):
-#   CSC_LINK                    — Base64-encoded .p12 Developer ID certificate.
-#   CSC_KEY_PASSWORD            — Password for the macOS .p12 certificate.
-#   APPLE_ID                    — Apple ID email used for notarization.
-#   APPLE_APP_SPECIFIC_PASSWORD — App-specific password generated at
-#                                 appleid.apple.com for the APPLE_ID account.
-#   APPLE_TEAM_ID               — 10-character Apple Developer Team ID.
+# Tagged release workflow. A public release is created only after the shared
+# quality gate, version/signing preflight, and all platform packages succeed.
+# Local/PR packaging remains deliberately unsigned (see build.yml).
 
 name: Release
 
@@ -29,164 +9,304 @@ on:
     tags:
       - "v*"
 
-# Only one release workflow should run at a time for a given tag.
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
-# ── Shared inputs / outputs ──────────────────────────────────────────────────
-# The tag name (e.g. "v2.0.0") is derived from github.ref_name and used as
-# the release title / artifact directory.
-
-# Opt into Node.js 24 for action runners (becomes default June 2026)
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  # ============================================================================
-  # Platform build jobs — run in parallel
-  # ============================================================================
-
-  # Determine the update channel once and share it across all build jobs.
-  # Tags with a prerelease suffix (e.g. v2.0.0-alpha.1) publish to the
-  # "experimental" channel so stable users are never offered these builds.
   resolve-channel:
     name: Resolve update channel
     runs-on: ubuntu-latest
     outputs:
-      channel: ${{ steps.ch.outputs.channel }}
+      channel: ${{ steps.channel.outputs.channel }}
     steps:
-      - name: Set channel
-        id: ch
+      - name: Select stable or experimental channel
+        id: channel
+        shell: bash
         run: |
-          if [[ "${{ github.ref_name }}" == *-* ]]; then
+          if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
             echo "channel=experimental" >> "$GITHUB_OUTPUT"
           else
             echo "channel=latest" >> "$GITHUB_OUTPUT"
           fi
 
-  build-windows:
-    name: Build — Windows
-    runs-on: windows-latest
-    needs: resolve-channel
-
+  # This is the release gate for platform-independent checks. Platform jobs
+  # cannot start unless every check, including the packaging smoke test, passes.
+  quality-gate:
+    name: Release quality gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Set up Node.js (LTS)
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "lts/*"
-          cache: "npm"
+          cache: npm
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Build (electron-vite)
-        run: npx electron-vite build
+      - name: Audit production dependencies
+        run: npm run audit:production
 
-      # electron-builder --win produces the NSIS x64 installer defined in
-      # package.json under build.win.  --publish always uploads artifacts
-      # directly to the draft GitHub Release created by the release job.
-      - name: Package & publish — Windows
-        run: npx electron-builder --win --publish always
+      - name: Audit all dependencies
+        run: npm run audit:full
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm run test
+
+      - name: Type check
+        run: npm run type-check
+
+      - name: Build
+        run: npm run build
+
+      - name: Package smoke test (unsigned, no publish)
+        run: npx electron-builder --dir --publish never
+
+  # Check the immutable tag points at the version being built and refuse a
+  # public tag release unless both desktop signing pipelines are configured.
+  release-preflight:
+    name: Verify tag and release credentials
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "lts/*"
+
+      - name: Verify tag matches package.json
+        shell: bash
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          package_version="$(node -p "require('./package.json').version")"
+          if [[ "$tag_version" != "$package_version" ]]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match package.json version ${package_version}" >&2
+            exit 1
+          fi
+          echo "Verified ${GITHUB_REF_NAME} == package.json ${package_version}"
+
+      - name: Require signing and notarization credentials
+        shell: bash
         env:
-          # GitHub Releases upload token
-          GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          missing=()
+          [[ -n "$WIN_CSC_LINK" ]] || missing+=(WIN_CSC_LINK)
+          [[ -n "$WIN_CSC_KEY_PASSWORD" ]] || missing+=(WIN_CSC_KEY_PASSWORD)
+          [[ -n "$CSC_LINK" ]] || missing+=(CSC_LINK)
+          [[ -n "$CSC_KEY_PASSWORD" ]] || missing+=(CSC_KEY_PASSWORD)
+          [[ -n "$APPLE_ID" ]] || missing+=(APPLE_ID)
+          [[ -n "$APPLE_APP_SPECIFIC_PASSWORD" ]] || missing+=(APPLE_APP_SPECIFIC_PASSWORD)
+          [[ -n "$APPLE_TEAM_ID" ]] || missing+=(APPLE_TEAM_ID)
+          if ((${#missing[@]})); then
+            echo "Tagged public releases require signing/notarization secrets: ${missing[*]}" >&2
+            exit 1
+          fi
 
-          # Windows code signing — both must be set, or neither (unsigned build).
-          # WIN_CSC_LINK accepts a base64-encoded .pfx or a file:// / https:// URL.
+  build-windows:
+    name: Build — Windows
+    runs-on: windows-latest
+    needs: [resolve-channel, quality-gate, release-preflight]
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Node.js (LTS)
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "lts/*"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Package and publish signed Windows installer
+        run: npx electron-builder --win --publish always --config.forceCodeSigning=true --config.publish.channel="${{ needs.resolve-channel.outputs.channel }}"
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
 
-  # ----------------------------------------------------------------------------
+      - name: Verify Windows update metadata
+        shell: bash
+        env:
+          CHANNEL: ${{ needs.resolve-channel.outputs.channel }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          version="${VERSION#v}"
+          file="dist/${CHANNEL}.yml"
+          test -f "$file" || { echo "Expected Windows update metadata $file was not generated" >&2; exit 1; }
+          grep -Eq "^version: ['\"]?${version}['\"]?$" "$file" || {
+            echo "Metadata version mismatch in $file" >&2
+            exit 1
+          }
+          grep -Eq '^path: .+' "$file" || { echo "Missing artifact path in $file" >&2; exit 1; }
+          grep -Eq '^sha512: .+' "$file" || { echo "Missing sha512 in $file" >&2; exit 1; }
 
   build-macos:
     name: Build — macOS
     runs-on: macos-latest
-    needs: resolve-channel
-
+    needs: [resolve-channel, quality-gate, release-preflight]
+    permissions:
+      contents: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Set up Node.js (LTS)
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "lts/*"
-          cache: "npm"
+          cache: npm
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Build (electron-vite)
-        run: npx electron-vite build
+      - name: Build
+        run: npm run build
 
-      - name: Package & publish — macOS
-        run: npx electron-builder --mac --publish always
+      - name: Package, publish, sign, and notarize macOS installer
+        run: npx electron-builder --mac --publish always --config.forceCodeSigning=true --config.publish.channel="${{ needs.resolve-channel.outputs.channel }}"
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
-          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          CSC_IDENTITY_AUTO_DISCOVERY: "true"
 
-  # ----------------------------------------------------------------------------
+      - name: Verify macOS update metadata
+        shell: bash
+        env:
+          CHANNEL: ${{ needs.resolve-channel.outputs.channel }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          version="${VERSION#v}"
+          file="dist/${CHANNEL}-mac.yml"
+          test -f "$file" || { echo "Expected macOS update metadata $file was not generated" >&2; exit 1; }
+          grep -Eq "^version: ['\"]?${version}['\"]?$" "$file" || {
+            echo "Metadata version mismatch in $file" >&2
+            exit 1
+          }
+          grep -Eq '^path: .+' "$file" || { echo "Missing artifact path in $file" >&2; exit 1; }
+          grep -Eq '^sha512: .+' "$file" || { echo "Missing sha512 in $file" >&2; exit 1; }
 
   build-linux:
     name: Build — Linux
     runs-on: ubuntu-latest
-    needs: resolve-channel
-
+    needs: [resolve-channel, quality-gate, release-preflight]
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Set up Node.js (LTS)
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "lts/*"
-          cache: "npm"
+          cache: npm
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Build (electron-vite)
-        run: npx electron-vite build
+      - name: Build
+        run: npm run build
 
-      # electron-builder --linux produces AppImage and .deb packages as defined
-      # in package.json under build.linux.
-      - name: Package & publish — Linux
-        run: npx electron-builder --linux --publish always
+      - name: Package and publish Linux installers
+        run: npx electron-builder --linux --publish always --config.publish.channel="${{ needs.resolve-channel.outputs.channel }}"
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
 
-  # ============================================================================
-  # Final release job — runs after all three platform builds succeed
-  # ============================================================================
+      - name: Generate Linux checksums and SBOM
+        env:
+          CHANNEL: ${{ needs.resolve-channel.outputs.channel }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          file="dist/${CHANNEL}-linux.yml"
+          test -f "$file" || { echo "Expected Linux update metadata $file was not generated" >&2; exit 1; }
+          grep -Eq "^version: ['\"]?${version}['\"]?$" "$file" || {
+            echo "Metadata version mismatch in $file" >&2
+            exit 1
+          }
+          grep -Eq '^path: .+' "$file" || { echo "Missing artifact path in $file" >&2; exit 1; }
+          grep -Eq '^sha512: .+' "$file" || { echo "Missing sha512 in $file" >&2; exit 1; }
+          find dist -maxdepth 1 -type f \
+            ! -name SHA256SUMS.txt ! -name SBOM.cdx.json \
+            -print0 | sort -z | xargs -0 sha256sum > dist/SHA256SUMS.txt
+          npm sbom --sbom-format cyclonedx --sbom-type application > dist/SBOM.cdx.json
+
+      - name: Upload Linux checksums and SBOM
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-linux-${{ github.ref_name }}
+          path: |
+            dist/SHA256SUMS.txt
+            dist/SBOM.cdx.json
+          if-no-files-found: error
+
+      - name: Attest Linux packages, checksums, and SBOM
+        uses: actions/attest-build-provenance@c074443f1aee8d4aeeae555aebba3282517141b2 # v2.2.3
+        with:
+          subject-path: |
+            dist/*.AppImage
+            dist/*.deb
+            dist/*-linux.yml
+            dist/SHA256SUMS.txt
+            dist/SBOM.cdx.json
 
   create-release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
-    needs:
-      - resolve-channel
-      - build-windows
-      - build-macos
-      - build-linux
+    needs: [resolve-channel, quality-gate, release-preflight, build-windows, build-macos, build-linux]
     permissions:
       contents: write
-
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
-          # Use a token that can push back to main (GITHUB_TOKEN works for
-          # repos without branch protection on main; use a PAT if needed).
           token: ${{ secrets.GH_TOKEN || github.token }}
 
-      # Generate release notes for this tag only (no header, just the body)
+      # Platform installers and channel metadata are uploaded by electron-builder
+      # above. Only supplemental Linux security metadata needs a later upload.
+      - name: Download Linux checksums and SBOM
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-linux-${{ github.ref_name }}
+          path: release-assets/linux
       - name: Generate release notes
-        id: cliff
-        uses: orhun/git-cliff-action@v4
+        uses: orhun/git-cliff-action@e16f179f0be49ecdfe63753837f20b9531642772 # v4.7.0
         with:
           config: cliff.toml
           args: --latest --strip header
@@ -194,9 +314,8 @@ jobs:
           OUTPUT: RELEASE_NOTES.md
           GITHUB_REPO: ${{ github.repository }}
 
-      # Regenerate the full CHANGELOG.md and commit it back to main
       - name: Update CHANGELOG.md
-        uses: orhun/git-cliff-action@v4
+        uses: orhun/git-cliff-action@e16f179f0be49ecdfe63753837f20b9531642772 # v4.7.0
         with:
           config: cliff.toml
           args: --output CHANGELOG.md
@@ -204,38 +323,38 @@ jobs:
           GITHUB_REPO: ${{ github.repository }}
 
       - name: Commit CHANGELOG.md
+        shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add CHANGELOG.md
-          # Only commit if there are actual changes
           git diff --staged --quiet && echo "No changes to CHANGELOG.md" && exit 0
-          git commit -m "docs: update CHANGELOG.md for ${{ github.ref_name }} [skip ci]"
+          git commit -m "docs: update CHANGELOG.md for ${GITHUB_REF_NAME} [skip ci]"
           git push origin HEAD:main
-
-      # Publish the GitHub Release.
-      # electron-builder's --publish always creates a draft release and uploads
-      # all platform artifacts to it.  We try `gh release edit` first to update
-      # that existing draft.  If no draft was created (e.g. token permissions),
-      # we fall back to `gh release create`.
-      - name: Publish GitHub Release
-        run: |
-          PRERELEASE_FLAG=""
-          if [[ "${{ github.ref_name }}" == *-* ]]; then
-            PRERELEASE_FLAG="--prerelease"
-          fi
-          if gh release view "${{ github.ref_name }}" &>/dev/null; then
-            gh release edit "${{ github.ref_name }}" \
-              --draft=false \
-              --title "MyFTB Launcher ${{ github.ref_name }}" \
-              --notes-file RELEASE_NOTES.md \
-              $PRERELEASE_FLAG
-          else
-            gh release create "${{ github.ref_name }}" \
-              --title "MyFTB Launcher ${{ github.ref_name }}" \
-              --notes-file RELEASE_NOTES.md \
-              $PRERELEASE_FLAG
-          fi
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
 
+      - name: Publish GitHub Release and assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
+        run: |
+          prerelease_args=()
+          if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
+            prerelease_args+=(--prerelease)
+          fi
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release edit "${GITHUB_REF_NAME}" \
+              --draft=false \
+              --title "MyFTB Launcher ${GITHUB_REF_NAME}" \
+              --notes-file RELEASE_NOTES.md \
+              "${prerelease_args[@]}"
+          else
+            gh release create "${GITHUB_REF_NAME}" \
+              --title "MyFTB Launcher ${GITHUB_REF_NAME}" \
+              --notes-file RELEASE_NOTES.md \
+              "${prerelease_args[@]}"
+          fi
+          mapfile -d '' assets < <(find release-assets -type f -print0)
+          ((${#assets[@]})) || { echo "No release assets were downloaded" >&2; exit 1; }
+          gh release upload "${GITHUB_REF_NAME}" "${assets[@]}" --clobber

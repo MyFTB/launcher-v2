@@ -14,7 +14,9 @@
     "type-check": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p src/renderer/tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "eslint src --report-unused-disable-directives --max-warnings 0"
+    "lint": "eslint src --report-unused-disable-directives --max-warnings 0",
+    "audit:production": "npm audit --omit=dev --audit-level=high",
+    "audit:full": "npm audit --audit-level=high"
   },
   "dependencies": {
     "@fontsource-variable/outfit": "^5.2.8",
@@ -22,7 +24,7 @@
     "@xmcl/core": "^2.15.1",
     "@xmcl/installer": "^6.1.2",
     "electron-updater": "^6.8.3",
-    "undici": "^8.0.3"
+    "undici": "^8.10.0"
   },
   "devDependencies": {
     "@electron-toolkit/tsconfig": "^2.0.0",
@@ -115,7 +117,8 @@
   },
   "license": "GPL-3.0-or-later",
   "overrides": {
-    "undici": "^8.0.3"
+    "brace-expansion": "^5.0.9",
+    "undici": "^8.10.0"
   },
   "author": {
     "name": "MyFTB",
