@@ -147,9 +147,10 @@ class ModpackApiService {
       async (_event, payload): Promise<ModpackManifest | null> => {
         try {
           const response = await fetchWithTimeout(fmt(Constants.packManifest, payload.location))
-          return validateModpackManifest(JSON.parse(
-            (await readBounded(response, MAX_MANIFEST_BYTES)).toString('utf8'),
-          ) as unknown)
+          return validateModpackManifest(
+            JSON.parse((await readBounded(response, MAX_MANIFEST_BYTES)).toString('utf8')) as unknown,
+            payload.location,
+          )
         } catch (error) {
           logger.warn(`[ModpackApiService] Manifest fetch failed for ${payload.location}:`, error)
           return null

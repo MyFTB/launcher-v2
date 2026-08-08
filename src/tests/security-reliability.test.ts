@@ -25,6 +25,7 @@ import {
 } from '../main/fetch-retry'
 import { redactSensitiveLogData } from '../main/logger'
 import { packOperationService } from '../main/services/pack-operation.service'
+import { resolveActiveTasks, resolveTaskPathCollisions } from '../main/services/install.service'
 import { assertSafeDownloadDestination } from '../main/filesystem-safety'
 import { isAllowedExternalUrl } from '../main/security/url-policy'
 
@@ -110,19 +111,53 @@ describe('path and update-channel validation', () => {
     expect(assertSafeRelativePath('mods/example.jar')).toBe('mods/example.jar')
   })
 
-  it('rejects duplicate and overlapping managed destinations', () => {
+  it('rejects exact duplicate and overlapping managed destinations', () => {
     const base = {
       name: 'Pack', title: 'Pack', version: '1', gameVersion: '1.20.1', location: 'pack.json',
       versionManifest: { id: '1.20.1' },
     }
     const task = (to: string) => ({ hash: 'a'.repeat(64), location: 'objects/file', to, userFile: false })
-    expect(() => validateModpackManifest({ ...base, tasks: [task('mods/a.jar'), task('mods/A.jar')] })).toThrow(/eindeutig/)
+    expect(() => validateModpackManifest({ ...base, tasks: [task('mods/a.jar'), task('mods/a.jar')] })).toThrow(/eindeutig/)
     expect(() => validateModpackManifest({ ...base, tasks: [task('config'), task('config/settings.json')] })).toThrow(/überlappen/)
     expect(() => validateModpackManifest({
       ...base,
       tasks: [task('config'), task('config-backup'), task('config/settings.json')],
     })).toThrow(/überlappen/)
     expect(validateModpackManifest({ ...base, tasks: [task('mods/a.jar'), task('config/settings.json')] }).tasks).toHaveLength(2)
+  })
+
+  it('accepts backend case variants and resolves them safely for case-insensitive filesystems', () => {
+    const base = {
+      name: 'Pack', title: 'Pack', version: '1', gameVersion: '1.20.1', location: 'pack.json',
+      versionManifest: { id: '1.20.1' },
+    }
+    const task = (to: string, hash: string) => ({ hash, location: `objects/${hash}`, to, userFile: false })
+    const manifest = validateModpackManifest({
+      ...base,
+      tasks: [task('config/buildcraft/objects.cfg', 'a'.repeat(64)), task('config/Buildcraft/objects.cfg', 'b'.repeat(64))],
+    })
+
+    expect(resolveTaskPathCollisions(manifest.tasks ?? [], false)).toHaveLength(2)
+    expect(resolveTaskPathCollisions(manifest.tasks ?? [], true)).toEqual([
+      expect.objectContaining({ to: 'config/Buildcraft/objects.cfg', hash: 'b'.repeat(64) }),
+    ])
+
+    const nested = validateModpackManifest({
+      ...base,
+      tasks: [task('Config', 'a'.repeat(64)), task('config/settings.json', 'b'.repeat(64))],
+    })
+    expect(() => resolveTaskPathCollisions(nested.tasks ?? [], true)).toThrow(/überlappen/)
+
+    const gated = validateModpackManifest({
+      ...base,
+      tasks: [
+        { ...task('config/Variant.cfg', 'a'.repeat(64)), when: { if: 'requireAny', features: ['A'] } },
+        { ...task('config/variant.cfg', 'b'.repeat(64)), when: { if: 'requireAny', features: ['B'] } },
+      ],
+    })
+    expect(resolveActiveTasks(gated.tasks ?? [], ['A'], true)[0].hash).toBe('a'.repeat(64))
+    expect(resolveActiveTasks(gated.tasks ?? [], ['B'], true)[0].hash).toBe('b'.repeat(64))
+    expect(resolveActiveTasks(gated.tasks ?? [], ['A', 'B'], true)[0].hash).toBe('b'.repeat(64))
   })
 
   it('accepts only known update channels', () => {

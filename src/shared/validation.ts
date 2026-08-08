@@ -330,7 +330,7 @@ export function validateModpackReference(value: unknown): ModpackManifestReferen
   const version = requireString(value.version, 'version', 128)
   const gameVersion = requireString(value.gameVersion, 'gameVersion', 128)
   const location = assertManifestLocation(value.location)
-  const logo = value.logo === undefined ? undefined : requireHttpsUrl(value.logo, 'logo')
+  const logo = value.logo == null ? undefined : requireHttpsUrl(value.logo, 'logo')
   return { name, title, version, gameVersion, location, ...(logo ? { logo } : {}) }
 }
 
@@ -343,7 +343,8 @@ export function validateFileTask(value: unknown): FileTask {
     ? requireHttpsUrl(value.location, 'Download-URL')
     : assertSafeRelativePath(value.location, 'Objektpfad')
   const to = assertSafeRelativePath(value.to, 'Zielpfad')
-  if (typeof value.userFile !== 'boolean') throw new ValidationError('userFile ist ungültig.')
+  const userFile = value.userFile == null ? false : value.userFile
+  if (typeof userFile !== 'boolean') throw new ValidationError('userFile ist ungültig.')
 
   let when: FileTask['when']
   if (value.when !== undefined) {
@@ -363,13 +364,13 @@ export function validateFileTask(value: unknown): FileTask {
     hash: value.hash.trim().toLowerCase(),
     location,
     to,
-    userFile: value.userFile,
+    userFile,
     ...(when ? { when } : {}),
   }
 }
 
 function validateFeatures(value: unknown): ModpackManifest['features'] {
-  if (value === undefined) return undefined
+  if (value == null) return undefined
   if (!Array.isArray(value) || value.length > 200) {
     throw new ValidationError('Die Modpack-Features sind ungültig.')
   }
@@ -388,7 +389,7 @@ function validateFeatures(value: unknown): ModpackManifest['features'] {
 }
 
 function validateLaunchFlags(value: unknown): ModpackManifest['launch'] {
-  if (value === undefined) return undefined
+  if (value == null) return undefined
   if (!isRecord(value) || Object.keys(value).length > 8) {
     throw new ValidationError('Die JVM-Startparameter des Modpacks sind ungültig.')
   }
@@ -406,7 +407,7 @@ function validateLaunchFlags(value: unknown): ModpackManifest['launch'] {
 }
 
 function hasDuplicateOrNestedPath(paths: string[]): boolean {
-  const normalized = paths.map((entry) => entry.toLocaleLowerCase('en-US'))
+  const normalized = paths.map((entry) => entry.normalize('NFC'))
   const pathSet = new Set(normalized)
   if (pathSet.size !== normalized.length) return true
   for (const entry of normalized) {
@@ -419,16 +420,21 @@ function hasDuplicateOrNestedPath(paths: string[]): boolean {
   return false
 }
 
-export function validateModpackManifest(value: unknown): ModpackManifest {
-  const reference = validateModpackReference(value)
-  if (!isRecord(value) || !isRecord(value.versionManifest)) {
+export function validateModpackManifest(value: unknown, referenceLocation?: string): ModpackManifest {
+  if (!isRecord(value)) throw new ValidationError('Das Modpack-Manifest ist ungültig.')
+  const reference = validateModpackReference(
+    referenceLocation === undefined
+      ? value
+      : { ...value, location: assertManifestLocation(referenceLocation) },
+  )
+  if (!isRecord(value.versionManifest)) {
     throw new ValidationError('Das Modpack-Manifest enthält kein gültiges Versionsmanifest.')
   }
   const versionId = requireString(value.versionManifest.id, 'Versions-ID', 256)
   if (!versionId || /[\\/\0]/.test(versionId) || versionId === '.' || versionId === '..') {
     throw new ValidationError('Die Versions-ID ist ungültig.')
   }
-  const tasks = value.tasks === undefined
+  const tasks = value.tasks == null
     ? undefined
     : Array.isArray(value.tasks) && value.tasks.length <= 100_000
       ? value.tasks.map(validateFileTask)
@@ -438,18 +444,27 @@ export function validateModpackManifest(value: unknown): ModpackManifest {
   }
   const features = validateFeatures(value.features)
   const launch = validateLaunchFlags(value.launch)
-  const runtime = value.runtime === undefined ? undefined : requireString(value.runtime, 'Runtime', 128)
+  const runtime = value.runtime == null ? undefined : requireString(value.runtime, 'Runtime', 128)
   if (runtime !== undefined && (!runtime || !/^[A-Za-z0-9._-]+$/.test(runtime))) {
     throw new ValidationError('Der Runtime-Name ist ungültig.')
   }
+  const {
+    logo: _rawLogo,
+    tasks: _rawTasks,
+    features: _rawFeatures,
+    launch: _rawLaunch,
+    runtime: _rawRuntime,
+    versionManifest: _rawVersionManifest,
+    ...additionalFields
+  } = value
   return {
-    ...value as unknown as ModpackManifest,
+    ...additionalFields,
     ...reference,
     versionManifest: { ...value.versionManifest, id: versionId },
-    ...(tasks ? { tasks } : {}),
-    ...(features ? { features } : {}),
-    ...(launch ? { launch } : {}),
-    ...(runtime ? { runtime } : {}),
+    ...(tasks !== undefined ? { tasks } : {}),
+    ...(features !== undefined ? { features } : {}),
+    ...(launch !== undefined ? { launch } : {}),
+    ...(runtime !== undefined ? { runtime } : {}),
   }
 }
 

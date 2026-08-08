@@ -90,6 +90,50 @@ export function evaluateCondition(
   return true
 }
 
+const CASE_INSENSITIVE_MANAGED_PATHS = process.platform === 'win32' || process.platform === 'darwin'
+
+function managedPathKey(entry: string, caseInsensitive = CASE_INSENSITIVE_MANAGED_PATHS): string {
+  const normalized = entry.normalize('NFC')
+  return caseInsensitive ? normalized.toLocaleLowerCase('en-US') : normalized
+}
+
+/**
+ * Resolve backend tasks to paths that can be materialized safely on the current
+ * filesystem. Linux keeps case-distinct files. Windows and default macOS
+ * filesystems use the last backend task for a case-only collision, matching
+ * archive extraction semantics without allowing concurrent writes to one file.
+ */
+export function resolveTaskPathCollisions(
+  tasks: FileTask[],
+  caseInsensitive = CASE_INSENSITIVE_MANAGED_PATHS,
+): FileTask[] {
+  const resolved = new Map<string, FileTask>()
+  for (const task of tasks) resolved.set(managedPathKey(task.to, caseInsensitive), task)
+
+  const paths = new Set(resolved.keys())
+  for (const entry of paths) {
+    let separator = entry.indexOf('/')
+    while (separator !== -1) {
+      if (paths.has(entry.slice(0, separator))) {
+        throw new ValidationError('Download-Zielpfade dürfen sich nicht überlappen.')
+      }
+      separator = entry.indexOf('/', separator + 1)
+    }
+  }
+  return [...resolved.values()]
+}
+
+export function resolveActiveTasks(
+  tasks: FileTask[],
+  selectedFeatures: string[],
+  caseInsensitive = CASE_INSENSITIVE_MANAGED_PATHS,
+): FileTask[] {
+  return resolveTaskPathCollisions(
+    tasks.filter((task) => evaluateCondition(task.when, selectedFeatures)),
+    caseInsensitive,
+  )
+}
+
 /**
  * Infer which features are currently selected by checking which feature-gated
  * files exist on disk. Optimistic: assumes a feature is selected if evidence
@@ -593,10 +637,9 @@ function parseInstallTransaction(value: unknown): InstallTransactionJournal {
     }
   })
   const parsedRemoved = removed.map((entry) => assertSafeRelativePath(entry, 'Bereinigungsziel'))
-  const pathKey = (entry: string): string => entry.normalize('NFC').toLocaleLowerCase('en-US')
   const transactionPaths = [
-    ...parsedTargets.map((target) => pathKey(target.path)),
-    ...parsedRemoved.map(pathKey),
+    ...parsedTargets.map((target) => managedPathKey(target.path)),
+    ...parsedRemoved.map((entry) => managedPathKey(entry)),
   ]
   const transactionPathSet = new Set(transactionPaths)
   if (transactionPathSet.size !== transactionPaths.length) {
@@ -889,7 +932,7 @@ async function commitManagedTransaction(
   manifest: ModpackManifest,
   selectedFeatures: string[],
   oldManifest: ModpackManifest | null,
-  activeTasks: FileTask[] = manifest.tasks ?? [],
+  activeTasks: FileTask[] = resolveTaskPathCollisions(manifest.tasks ?? []),
 ): Promise<void> {
   const rollbackDir = path.join(stagingDir, 'rollback')
   const manifestPath = path.join(instanceDir, 'manifest.json')
@@ -901,11 +944,17 @@ async function commitManagedTransaction(
     throw new ValidationError('Das persistierte Modpack-Manifest überschreitet die erlaubte Größe.')
   }
   const featuresBytes = Buffer.from(`${JSON.stringify(selectedFeatures, null, 2)}\n`)
-  const pathKey = (entry: string): string => entry.normalize('NFC').toLocaleLowerCase('en-US')
-  const currentPaths = new Set(activeTasks.map((task) => pathKey(task.to)))
-  const staleTasks = (oldManifest?.tasks ?? []).filter(
-    (task) => !task.userFile && !currentPaths.has(pathKey(task.to)),
-  )
+  const currentPaths = new Set(activeTasks.map((task) => managedPathKey(task.to)))
+  const oldTasksByPath = new Map<string, FileTask[]>()
+  for (const task of oldManifest?.tasks ?? []) {
+    const key = managedPathKey(task.to)
+    const group = oldTasksByPath.get(key) ?? []
+    group.push(task)
+    oldTasksByPath.set(key, group)
+  }
+  const staleTasks = [...oldTasksByPath.entries()].flatMap(([key, tasks]) => (
+    currentPaths.has(key) || tasks.some((task) => task.userFile) ? [] : [tasks.at(-1)!]
+  ))
   const targets: InstallTransactionTarget[] = []
   for (const item of staged) {
     targets.push({
@@ -1356,7 +1405,7 @@ class InstallService {
     signal.throwIfAborted()
 
     // ── f. Stage, verify, and atomically commit managed pack files ────────────
-    const tasks = (manifest.tasks ?? []).filter((task) => evaluateCondition(task.when, selectedFeatures))
+    const tasks = resolveActiveTasks(manifest.tasks ?? [], selectedFeatures)
     const manifestPath = path.join(instanceDir, 'manifest.json')
     let oldManifest: ModpackManifest | null = null
     try {
@@ -1423,18 +1472,20 @@ class InstallService {
       // 2. Read old selection
       const oldSelection = await readSelectedFeatures(instanceDir, manifest)
 
-      // 3. Compute diff
-      const tasks = manifest.tasks ?? []
-      const toDownload: FileTask[] = []
-      const toDelete: FileTask[] = []
-
-      for (const task of tasks) {
-        if (!task.when) continue
-        const nowIncluded = evaluateCondition(task.when, newSelection)
-        const wasIncluded = evaluateCondition(task.when, oldSelection)
-        if (nowIncluded && !wasIncluded) toDownload.push(task)
-        if (!nowIncluded && wasIncluded) toDelete.push(task)
-      }
+      // 3. Compute the materialized path diff. This also resolves case-only
+      // backend collisions before any staging path is created.
+      const oldTasks = resolveActiveTasks(manifest.tasks ?? [], oldSelection)
+      const newTasks = resolveActiveTasks(manifest.tasks ?? [], newSelection)
+      const oldByPath = new Map(oldTasks.map((task) => [managedPathKey(task.to), task]))
+      const newByPath = new Map(newTasks.map((task) => [managedPathKey(task.to), task]))
+      const toDownload = newTasks.filter((task) => {
+        const previous = oldByPath.get(managedPathKey(task.to))
+        return previous === undefined
+          || previous.hash !== task.hash
+          || previous.location !== task.location
+          || previous.userFile !== task.userFile
+      })
+      const toDelete = oldTasks.filter((task) => !newByPath.has(managedPathKey(task.to)))
 
       logger.info(`[InstallService] Feature change diff for "${packName}": ${toDownload.length} to download, ${toDelete.length} to delete`)
 
@@ -1545,7 +1596,10 @@ class InstallService {
           error: `Das Manifest konnte nicht geladen werden (HTTP ${response.status}).`,
         }
       }
-      const manifest = validateModpackManifest(await readJsonResponseLimited(response, 50 * 1024 * 1024))
+      const manifest = validateModpackManifest(
+        await readJsonResponseLimited(response, 50 * 1024 * 1024),
+        reference.location,
+      )
       if (manifest.name !== reference.name) throw new ValidationError('Manifest und Modpack-Referenz stimmen nicht überein.')
 
       let features = selectedFeatures
@@ -1590,7 +1644,8 @@ class InstallService {
       const selected = await readSelectedFeatures(instanceDir, manifest)
       const missing: string[] = []
       const corrupt: string[] = []
-      for (const task of (manifest.tasks ?? []).filter((entry) => !entry.userFile && evaluateCondition(entry.when, selected))) {
+      const activeTasks = resolveActiveTasks(manifest.tasks ?? [], selected)
+      for (const task of activeTasks.filter((entry) => !entry.userFile)) {
         await assertNoSymlinkEscape(instanceDir, task.to)
         const target = path.resolve(instanceDir, task.to)
         try {
@@ -1655,7 +1710,8 @@ class InstallService {
         try {
           const selected = await readSelectedFeatures(instanceDir, manifest)
           const invalid = new Set([...verification.missing, ...verification.corrupt])
-          const tasks = (manifest.tasks ?? []).filter((task) => !task.userFile && invalid.has(task.to))
+          const activeTasks = resolveActiveTasks(manifest.tasks ?? [], selected)
+          const tasks = activeTasks.filter((task) => !task.userFile && invalid.has(task.to))
           const key = crypto.createHash('sha256').update(`repair\0${packName}\0${manifest.version}`).digest('hex').slice(0, 24)
           const stagingDir = path.join(instanceDir, '.myftb-staging', key)
           await prepareStagingDirectory(instanceDir, stagingDir)
@@ -1675,7 +1731,7 @@ class InstallService {
             manifest,
             selected,
             manifest,
-            manifest.tasks ?? [],
+            resolveTaskPathCollisions(manifest.tasks ?? []),
           )
           return { success: true, packName, operationId, failures: [] }
         } catch (error) {
