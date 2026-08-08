@@ -110,6 +110,16 @@ export function getRuntimeArchSuffix(): string {
   return process.arch.includes('64') ? '-x64' : ''
 }
 
+/** Relative Java binary path used by the runtime indexes on each platform. */
+export function runtimeJavaBinaryPath(
+  platform: NodeJS.Platform = process.platform,
+  launchBinary = true,
+): string {
+  if (platform === 'darwin') return path.join('Contents', 'Home', 'bin', 'java')
+  if (platform === 'win32') return path.join('bin', launchBinary ? 'javaw.exe' : 'java.exe')
+  return path.join('bin', 'java')
+}
+
 /**
  * Heuristically checks whether a JAVA_HOME path matches the required
  * Java major version by looking for the version number in the directory name.
@@ -295,8 +305,7 @@ async function recoverRuntimeArtifacts(runtimeName: string): Promise<void> {
 async function getCachedRuntimeBin(runtimeName: string): Promise<string | null> {
   await recoverRuntimeArtifacts(runtimeName)
   const runtimeDir = path.join(getRuntimesRoot(), runtimeName)
-  const bin = process.platform === 'win32' ? 'javaw.exe' : 'java'
-  const binPath = path.join(runtimeDir, 'bin', bin)
+  const binPath = path.join(runtimeDir, runtimeJavaBinaryPath())
   try {
     const marker = JSON.parse(await fs.readFile(path.join(runtimeDir, RUNTIME_COMPLETE_MARKER), 'utf8')) as unknown
     if (
@@ -534,8 +543,8 @@ export async function ensureRuntime(
     await Promise.all(Array.from({ length: Math.min(4, objects.length) }, () => worker()))
     if (failures.length) throw new Error(`${failures.length} JRE-Datei(en) konnten nicht sicher geladen werden.`)
 
-    const javaBinary = path.join(stagingDir, 'bin', process.platform === 'win32' ? 'javaw.exe' : 'java')
-    const validationBinary = path.join(stagingDir, 'bin', process.platform === 'win32' ? 'java.exe' : 'java')
+    const javaBinary = path.join(stagingDir, runtimeJavaBinaryPath(process.platform, true))
+    const validationBinary = path.join(stagingDir, runtimeJavaBinaryPath(process.platform, false))
     for (const binary of new Set([javaBinary, validationBinary])) {
       const javaStat = await fs.stat(binary)
       if (!javaStat.isFile() || javaStat.size === 0) throw new Error('Die geladene JRE enthält keine gültige Java-Datei.')
