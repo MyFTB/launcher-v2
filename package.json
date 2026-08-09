@@ -5,13 +5,13 @@
   "main": "out/main/index.js",
   "engines": {
     "node": ">=24.18.1 <25",
-    "npm": ">=12.0.2 <13"
+    "npm": ">=11.16.0 <13"
   },
-  "packageManager": "npm@12.0.2",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
+    "postinstall": "node scripts/repair-xmcl.cjs",
     "prepare:electron": "install-electron",
     "package": "npm run build && electron-builder",
     "package:win": "npm run build && electron-builder --win",
@@ -141,11 +141,5 @@
     "esbuild@0.25.12": true,
     "esbuild@0.28.2": true,
     "fsevents@2.3.3": true
-  },
-  "patchedDependencies": {
-    "@xmcl/core@2.16.0": "patches/@xmcl/core@2.16.0.patch",
-    "@xmcl/installer@6.3.1": "patches/@xmcl/installer@6.3.1.patch",
-    "@xmcl/file-transfer@2.1.2": "patches/@xmcl/file-transfer@2.1.2.patch",
-    "@xmcl/unzip@2.2.0": "patches/@xmcl/unzip@2.2.0.patch"
   }
 }

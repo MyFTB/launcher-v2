@@ -4,11 +4,10 @@ Cross-platform Electron app (Windows/macOS/Linux) for discovering, installing, a
 
 ## Toolchain
 
-Use Node.js `24.18.1` and npm `12.0.2`. Select Node with `.nvmrc`, then install dependencies with:
+Use Node.js `24.18.1` (or a newer Node 24 LTS patch) with its bundled npm `11.16.0` or newer. Select Node with `.nvmrc`, then install dependencies with:
 
 ```bash
 nvm use
-npm install --global npm@12.0.2
 npm ci --strict-peer-deps
 npm run prepare:electron
 ```
@@ -52,9 +51,9 @@ Keep these compatibility holds:
 - Keep Node types on version 24 for Node 24 and Electron 43.
 - Use Undici 8 for launcher HTTP. Use the `undici-xmcl` Undici 7 alias only for XMCL.
 
-The XMCL 6.3.1 package metadata is invalid. Keep its narrow overrides and npm patches until a verified stable XMCL release replaces them.
+The XMCL 6.3.1 package metadata is invalid. Keep its narrow overrides and version-checked postinstall repair until a verified stable XMCL release replaces them.
 
-Regenerate the lockfile with npm `12.0.2`. Verify changes with `npm ci --strict-peer-deps`, `npm ls --all`, and both audit scripts.
+Regenerate the lockfile with the npm version bundled with the Node release in `.nvmrc`. Verify changes with `npm ci --strict-peer-deps`, `npm ls --all`, and both audit scripts.
 
 ## Architecture
 

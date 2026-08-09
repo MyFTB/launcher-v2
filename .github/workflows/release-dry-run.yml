@@ -24,9 +24,6 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
 
-      - name: Install npm 12.0.2
-        run: npm install --global npm@12.0.2
-
       - name: Print tool versions
         run: |
           node --version
@@ -63,9 +60,6 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
-
-      - name: Install npm 12.0.2
-        run: npm install --global npm@12.0.2
 
       - name: Print tool versions
         run: |
@@ -111,9 +105,6 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
 
-      - name: Install npm 12.0.2
-        run: npm install --global npm@12.0.2
-
       - name: Print tool versions
         run: |
           node --version
@@ -157,9 +148,6 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
-
-      - name: Install npm 12.0.2
-        run: npm install --global npm@12.0.2
 
       - name: Print tool versions
         run: |
@@ -206,9 +194,6 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
-
-      - name: Install npm 12.0.2
-        run: npm install --global npm@12.0.2
 
       - name: Print tool versions
         run: |

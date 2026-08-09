@@ -2,13 +2,12 @@
 
 ## Development setup
 
-Use Node.js `24.18.1` and npm `12.0.2`.
+Use Node.js `24.18.1` (or a newer Node 24 LTS patch) with its bundled npm `11.16.0` or newer. Do not upgrade npm separately.
 
 ```bash
 git clone https://github.com/MyFTB/launcher-v2.git
 cd launcher-v2
 nvm use
-npm install --global npm@12.0.2
 npm ci --strict-peer-deps
 npm run prepare:electron
 npm run dev
@@ -86,9 +85,9 @@ Keep these compatibility boundaries until their parent tools support the next ma
 - Node 24 types with Node 24 and Electron 43
 - Undici 8 for launcher HTTP and Undici 7 for XMCL
 
-Do not add blanket dependency overrides. The current XMCL overrides and npm patches repair published 6.3.1 metadata only. Remove them after a verified stable XMCL release makes them unnecessary.
+Do not add blanket dependency overrides. The current XMCL overrides and version-checked postinstall repair fix published 6.3.1 metadata only. Remove them after a verified stable XMCL release makes them unnecessary.
 
-Regenerate `package-lock.json` with npm `12.0.2`. Run a clean `npm ci --strict-peer-deps` after each dependency change.
+Regenerate `package-lock.json` with the npm version bundled with the Node release in `.nvmrc`. Run a clean `npm ci --strict-peer-deps` after each dependency change.
 
 ### Commits
 

@@ -39,11 +39,11 @@ Official Windows and macOS releases use the signing and notarization release wor
 
 ### Prerequisites
 
-- [Node.js](https://nodejs.org/) `24.18.1`
-- npm `12.0.2`
+- [Node.js](https://nodejs.org/) `24.18.1` or a newer Node 24 LTS patch
+- The npm version bundled with Node.js (`11.16.0` or newer)
 - [Git](https://git-scm.com/)
 
-The `.nvmrc` file selects the required Node.js version. The `packageManager` field records the required npm version.
+The `.nvmrc` file selects the tested Node.js version. Use its bundled npm; no separate npm upgrade is required.
 
 ### Setup
 
@@ -51,7 +51,6 @@ The `.nvmrc` file selects the required Node.js version. The `packageManager` fie
 git clone https://github.com/MyFTB/launcher-v2.git
 cd launcher-v2
 nvm use
-npm install --global npm@12.0.2
 npm ci --strict-peer-deps
 npm run prepare:electron
 ```
@@ -85,7 +84,7 @@ The current compatibility holds are intentional:
 - Node types remain on version 24 to match Node 24 and Electron 43.
 - XMCL uses the `undici-xmcl` alias on Undici 7. Launcher HTTP uses Undici 8.
 
-These holds are the only expected direct results from `npm outdated`. The XMCL 6.3.1 release has invalid workspace and entrypoint metadata. Narrow overrides and npm patches repair that release until XMCL publishes a fixed stable version.
+These holds are the only expected direct results from `npm outdated`. The XMCL 6.3.1 release has invalid workspace and entrypoint metadata. Narrow overrides and the version-checked postinstall repair fix that release until XMCL publishes a corrected stable version.
 
 ### Project structure
 
