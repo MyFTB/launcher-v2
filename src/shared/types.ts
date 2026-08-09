@@ -286,6 +286,11 @@ export interface RetryFailedPayload { packName: string }
 // ─── Launch sessions ────────────────────────────────────────────────────────
 
 export type LaunchState = 'launching' | 'running' | 'closed' | 'crashed'
+
+export function isCompletedLaunchState(state: LaunchState): state is 'closed' | 'crashed' {
+  return state === 'closed' || state === 'crashed'
+}
+
 export interface LaunchSession {
   id: string
   packName: string
@@ -423,6 +428,7 @@ export interface ElectronAPI {
 
   launchStart(packName: string): Promise<LaunchStartResult>
   launchKill(sessionId: string): Promise<void>
+  launchRemoveSession(sessionId: string): Promise<void>
   launchGetSessions(): Promise<LaunchSession[]>
   launchGetLog(sessionId: string): Promise<string>
   launchOpenFolder(packName: string): Promise<void>

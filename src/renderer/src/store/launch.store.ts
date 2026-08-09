@@ -21,6 +21,7 @@ interface LaunchStoreState {
   launchError: string | null
   launch(packName: string): Promise<LaunchStartResult>
   kill(sessionId: string): Promise<void>
+  removeSession(sessionId: string): Promise<void>
   fetchLog(sessionId: string): Promise<void>
   selectSession(sessionId: string): void
   openFolder(packName: string): Promise<void>
@@ -33,6 +34,15 @@ let listenersInitialized = false
 let logFlushTimer: ReturnType<typeof setTimeout> | null = null
 let pendingSelectionId: string | null = null
 const pendingLogs = new Map<string, string[]>()
+const removedSessionIds = new Set<string>()
+const MAX_REMOVED_SESSION_IDS = 1_000
+
+function rememberRemovedSession(sessionId: string): void {
+  removedSessionIds.add(sessionId)
+  if (removedSessionIds.size <= MAX_REMOVED_SESSION_IDS) return
+  const oldest = removedSessionIds.values().next().value
+  if (oldest) removedSessionIds.delete(oldest)
+}
 
 function flushLogs(): void {
   if (logFlushTimer) clearTimeout(logFlushTimer)
@@ -110,6 +120,10 @@ export const useLaunchStore = create<LaunchStoreState>()((set, get) => ({
     await ipc.launch.kill(sessionId)
   },
 
+  async removeSession(sessionId) {
+    await ipc.launch.removeSession(sessionId)
+  },
+
   async fetchLog(sessionId) {
     flushLogs()
     const text = await ipc.launch.getLog(sessionId)
@@ -143,6 +157,7 @@ export const useLaunchStore = create<LaunchStoreState>()((set, get) => ({
       set((state) => {
         const sessions = { ...state.sessions }
         for (const session of snapshot) {
+          if (removedSessionIds.has(session.id)) continue
           const existing = sessions[session.id]
           if (existing && existing.updatedAt >= session.updatedAt) continue
           sessions[session.id] = {
@@ -150,12 +165,14 @@ export const useLaunchStore = create<LaunchStoreState>()((set, get) => ({
             logLines: existing?.logLines ?? [],
           }
         }
+        const orderedSessions = Object.values(sessions).sort((a, b) => b.startedAt - a.startedAt)
         const selectedSessionId = requestedSelection && sessions[requestedSelection]
           ? requestedSelection
-          : state.selectedSessionId
-            ?? snapshot.find((session) => session.state === 'running' || session.state === 'launching')?.id
-            ?? snapshot[0]?.id
-            ?? null
+          : state.selectedSessionId && sessions[state.selectedSessionId]
+            ? state.selectedSessionId
+            : orderedSessions.find((session) => session.state === 'running' || session.state === 'launching')?.id
+              ?? orderedSessions[0]?.id
+              ?? null
         return { sessions, selectedSessionId }
       })
       if (
@@ -169,7 +186,7 @@ export const useLaunchStore = create<LaunchStoreState>()((set, get) => ({
 
     onEvent('launch:state', (...args: unknown[]) => {
       const event = args[0] as LaunchStateEvent
-      if (!event?.session?.id) return
+      if (!event?.session?.id || removedSessionIds.has(event.session.id)) return
       const requested = pendingSelectionId === event.session.id
       if (requested) pendingSelectionId = null
       set((state) => ({
@@ -186,12 +203,12 @@ export const useLaunchStore = create<LaunchStoreState>()((set, get) => ({
 
     onEvent('launch:log', (...args: unknown[]) => {
       const event = args[0] as LaunchLogEvent
-      if (event?.sessionId && typeof event.line === 'string') queueLog(event)
+      if (event?.sessionId && !removedSessionIds.has(event.sessionId) && typeof event.line === 'string') queueLog(event)
     })
 
     onEvent('launch:console-select', (...args: unknown[]) => {
       const event = args[0] as LaunchConsoleSelectEvent
-      if (!event?.sessionId) return
+      if (!event?.sessionId || removedSessionIds.has(event.sessionId)) return
       if (!get().sessions[event.sessionId]) {
         pendingSelectionId = event.sessionId
         return
@@ -204,6 +221,9 @@ export const useLaunchStore = create<LaunchStoreState>()((set, get) => ({
     onEvent('launch:session-removed', (...args: unknown[]) => {
       const event = args[0] as LaunchSessionRemovedEvent
       if (!event?.sessionId) return
+      rememberRemovedSession(event.sessionId)
+      pendingLogs.delete(event.sessionId)
+      if (pendingSelectionId === event.sessionId) pendingSelectionId = null
       set((state) => {
         if (!state.sessions[event.sessionId]) return state
         const { [event.sessionId]: _removed, ...sessions } = state.sessions

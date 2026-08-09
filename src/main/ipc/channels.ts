@@ -64,6 +64,8 @@ export const IpcChannels = {
   LAUNCH_START: 'launch:start',
   /** Renderer→Main: Kill running Minecraft process */
   LAUNCH_KILL: 'launch:kill',
+  /** Renderer→Main: Remove one completed launch session from console history */
+  LAUNCH_REMOVE_SESSION: 'launch:remove-session',
   /** Renderer→Main: Get the current launch-session snapshot */
   LAUNCH_GET_SESSIONS: 'launch:get-sessions',
   /** Renderer→Main: Get one session's log buffer */

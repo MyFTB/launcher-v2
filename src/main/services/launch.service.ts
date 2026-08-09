@@ -20,12 +20,14 @@ import { packOperationService, PackOperationConflictError } from './pack-operati
 import { logger, redactSensitiveLogData } from '../logger'
 import { assertContainedNoLinks, readSafeRegularFile } from '../filesystem-safety'
 import { fetchWithRetry, readJsonResponseLimited } from '../fetch-retry'
+import { isCompletedLaunchState } from '../../shared/types'
 import type {
   LaunchCreateShortcutPayload,
   LaunchDeletePayload,
   LaunchLogEvent,
   LaunchOpenFolderPayload,
   LaunchSession,
+  LaunchSessionRemovedEvent,
   LaunchStartPayload,
   LaunchStartResult,
   LaunchStateEvent,
@@ -330,6 +332,14 @@ class LaunchService {
       (_event, { sessionId }) => this.kill(sessionId),
     )
     secureHandle(
+      IpcChannels.LAUNCH_REMOVE_SESSION,
+      {
+        roles: ['launcher', 'console'],
+        validate: (value) => ({ sessionId: assertSessionId(requireObject(value).sessionId) }),
+      },
+      (_event, { sessionId }) => this.removeSession(sessionId),
+    )
+    secureHandle(
       IpcChannels.LAUNCH_GET_SESSIONS,
       { roles: ['launcher', 'console'], validate: noPayload },
       () => this.listSessions(),
@@ -611,6 +621,22 @@ class LaunchService {
     return session.log.getText()
   }
 
+  private removeSession(sessionId: string): void {
+    const session = this.sessions.get(sessionId)
+    if (!session) throw new IpcError('NOT_FOUND', 'Die Start-Sitzung wurde nicht gefunden.')
+    if (!isCompletedLaunchState(session.data.state)) {
+      throw new IpcError('CONFLICT', 'Eine laufende Minecraft-Sitzung muss zuerst beendet werden.')
+    }
+    this.dropSession(sessionId)
+  }
+
+  private dropSession(sessionId: string): void {
+    if (!this.sessions.delete(sessionId)) return
+    sendToTrustedWindows(IpcChannels.LAUNCH_SESSION_REMOVED, {
+      sessionId,
+    } satisfies LaunchSessionRemovedEvent)
+  }
+
   private async kill(sessionId: string): Promise<void> {
     const session = this.sessions.get(sessionId)
     if (!session || (session.data.state !== 'running' && session.data.state !== 'launching')) {
@@ -715,8 +741,7 @@ class LaunchService {
       .filter((session) => session.data.state === 'closed' || session.data.state === 'crashed')
       .sort((left, right) => right.data.updatedAt - left.data.updatedAt)
     for (const session of inactive.slice(Constants.launchSessionHistoryMax)) {
-      this.sessions.delete(session.data.id)
-      sendToTrustedWindows(IpcChannels.LAUNCH_SESSION_REMOVED, { sessionId: session.data.id })
+      this.dropSession(session.data.id)
     }
   }
 

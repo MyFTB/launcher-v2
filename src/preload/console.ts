@@ -10,6 +10,7 @@ type ConsoleChannelKey =
   | 'LAUNCH_GET_SESSIONS'
   | 'LAUNCH_GET_LOG'
   | 'LAUNCH_KILL'
+  | 'LAUNCH_REMOVE_SESSION'
   | 'LAUNCH_UPLOAD_LOG'
   | 'WINDOW_MINIMIZE'
   | 'WINDOW_MAXIMIZE'
@@ -27,6 +28,7 @@ const IpcChannels = {
   LAUNCH_GET_SESSIONS: 'launch:get-sessions',
   LAUNCH_GET_LOG: 'launch:get-log',
   LAUNCH_KILL: 'launch:kill',
+  LAUNCH_REMOVE_SESSION: 'launch:remove-session',
   LAUNCH_UPLOAD_LOG: 'launch:upload-log',
   WINDOW_MINIMIZE: 'window:minimize',
   WINDOW_MAXIMIZE: 'window:maximize',
@@ -61,6 +63,7 @@ const consoleApi = Object.freeze({
   launchGetSessions: () => invoke(IpcChannels.LAUNCH_GET_SESSIONS),
   launchGetLog: (sessionId: string) => invoke(IpcChannels.LAUNCH_GET_LOG, { sessionId }),
   launchKill: (sessionId: string) => invoke(IpcChannels.LAUNCH_KILL, { sessionId }),
+  launchRemoveSession: (sessionId: string) => invoke(IpcChannels.LAUNCH_REMOVE_SESSION, { sessionId }),
   launchUploadLog: (sessionId: string) => invoke(IpcChannels.LAUNCH_UPLOAD_LOG, { sessionId }),
   windowMinimize: () => ipcRenderer.send(IpcChannels.WINDOW_MINIMIZE),
   windowMaximize: () => ipcRenderer.send(IpcChannels.WINDOW_MAXIMIZE),

@@ -56,6 +56,7 @@ export const ipc = {
   launch: {
     start: (packName: string): Promise<LaunchStartResult> => window.electronAPI.launchStart(packName),
     kill: (sessionId: string): Promise<void> => window.electronAPI.launchKill(sessionId),
+    removeSession: (sessionId: string): Promise<void> => window.electronAPI.launchRemoveSession(sessionId),
     getSessions: (): Promise<LaunchSession[]> => window.electronAPI.launchGetSessions(),
     getLog: (sessionId: string): Promise<string> => window.electronAPI.launchGetLog(sessionId),
     openFolder: (packName: string): Promise<void> => window.electronAPI.launchOpenFolder(packName),

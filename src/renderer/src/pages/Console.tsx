@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
-import type { LaunchState } from '@shared/types'
+import { isCompletedLaunchState, type LaunchState } from '@shared/types'
 import { useLaunchStore } from '../store/launch.store'
 
 function stateLabel(state: LaunchState): string {
@@ -32,9 +32,12 @@ export default function Console() {
   const selectSession = useLaunchStore((state) => state.selectSession)
   const fetchLog = useLaunchStore((state) => state.fetchLog)
   const kill = useLaunchStore((state) => state.kill)
+  const removeSession = useLaunchStore((state) => state.removeSession)
   const [query, setQuery] = useState('')
   const [follow, setFollow] = useState(true)
   const [message, setMessage] = useState<string | null>(null)
+  const [removingSessionIds, setRemovingSessionIds] = useState<ReadonlySet<string>>(() => new Set())
+  const removingSessionIdsRef = useRef(new Set<string>())
   const viewportRef = useRef<HTMLDivElement>(null)
 
   const ordered = useMemo(
@@ -70,6 +73,22 @@ export default function Console() {
     setTimeout(() => setMessage(null), 4_000)
   }
 
+  const handleRemoveSession = async (sessionId: string): Promise<void> => {
+    if (removingSessionIdsRef.current.has(sessionId)) return
+    removingSessionIdsRef.current.add(sessionId)
+    setRemovingSessionIds(new Set(removingSessionIdsRef.current))
+    try {
+      await removeSession(sessionId)
+    } catch (error) {
+      showMessage(error instanceof Error
+        ? error.message
+        : 'Der Konsolen-Tab konnte nicht geschlossen werden. Bitte versuche es erneut.')
+    } finally {
+      removingSessionIdsRef.current.delete(sessionId)
+      setRemovingSessionIds(new Set(removingSessionIdsRef.current))
+    }
+  }
+
   const handleUpload = async (): Promise<void> => {
     if (!selected) return
     try {
@@ -91,30 +110,62 @@ export default function Console() {
 
   return (
     <section className="flex h-full min-h-0 flex-col bg-bg-surface" aria-label="Minecraft-Konsolen">
-      <div className="flex min-h-10 items-end gap-1 overflow-x-auto border-b border-border bg-bg-elevated px-2 pt-1">
+      <div
+        className="flex min-h-10 items-end gap-1 overflow-x-auto border-b border-border bg-bg-elevated px-2 pt-1"
+        role="tablist"
+        aria-label="Start-Sitzungen"
+      >
         {ordered.length === 0 ? (
           <span className="px-2 pb-2 text-xs text-text-muted">Keine Start-Sitzung</span>
         ) : ordered.map((session) => {
           const isSelected = session.id === selected?.id
           const isActive = session.state === 'running' || session.state === 'launching'
+          const canRemove = isCompletedLaunchState(session.state)
+          const isRemoving = removingSessionIds.has(session.id)
           return (
-            <button
+            <div
               key={session.id}
-              type="button"
-              onClick={() => selectSession(session.id)}
-              className={`group flex min-w-36 max-w-56 items-center gap-2 rounded-t-md border px-3 py-2 text-left text-xs transition-colors ${
+              role="presentation"
+              className={`flex min-w-36 max-w-56 items-stretch overflow-hidden rounded-t-md border text-xs transition-colors ${
                 isSelected
                   ? 'border-border border-b-bg-surface bg-bg-surface text-text-primary'
                   : 'border-transparent text-text-muted hover:bg-bg-overlay hover:text-text-secondary'
               }`}
-              aria-selected={isSelected}
-              role="tab"
             >
-              <span className={`h-2 w-2 shrink-0 rounded-full ${
-                isActive ? 'bg-accent' : session.state === 'crashed' ? 'bg-red-400' : 'bg-text-muted/50'
-              }`} />
-              <span className="min-w-0 flex-1 truncate">{session.packTitle}</span>
-            </button>
+              <button
+                type="button"
+                onClick={() => selectSession(session.id)}
+                className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
+                aria-selected={isSelected}
+                role="tab"
+              >
+                <span className={`h-2 w-2 shrink-0 rounded-full ${
+                  isActive ? 'bg-accent' : session.state === 'crashed' ? 'bg-red-400' : 'bg-text-muted/50'
+                }`} />
+                <span className="min-w-0 flex-1 truncate">{session.packTitle}</span>
+              </button>
+              {canRemove && (
+                <button
+                  type="button"
+                  className="flex w-8 shrink-0 items-center justify-center text-text-muted transition-colors hover:bg-bg-overlay hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent disabled:cursor-wait disabled:opacity-50"
+                  onClick={() => void handleRemoveSession(session.id)}
+                  disabled={isRemoving}
+                  aria-label={`Konsolen-Tab „${session.packTitle}“ schließen`}
+                  title="Tab schließen"
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                    className="h-3.5 w-3.5"
+                    aria-hidden="true"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              )}
+            </div>
           )
         })}
       </div>

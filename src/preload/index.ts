@@ -69,6 +69,7 @@ const api: ElectronAPI = {
 
   launchStart: (packName) => invoke(IpcChannels.LAUNCH_START, { packName }),
   launchKill: (sessionId) => invoke(IpcChannels.LAUNCH_KILL, { sessionId }),
+  launchRemoveSession: (sessionId) => invoke(IpcChannels.LAUNCH_REMOVE_SESSION, { sessionId }),
   launchGetSessions: () => invoke(IpcChannels.LAUNCH_GET_SESSIONS),
   launchGetLog: (sessionId) => invoke(IpcChannels.LAUNCH_GET_LOG, { sessionId }),
   launchOpenFolder: (packName) => invoke(IpcChannels.LAUNCH_OPEN_FOLDER, { packName }),
