@@ -77,7 +77,7 @@ jobs:
         run: npm run package -- --dir --publish never
 
   release-preflight:
-    name: Verify tag and release credentials
+    name: Verify release tag
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -105,30 +105,6 @@ jobs:
             exit 1
           fi
           echo "Verified ${GITHUB_REF_NAME} == package.json ${package_version}"
-
-      - name: Require signing and notarization credentials
-        shell: bash
-        env:
-          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
-          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          missing=()
-          [[ -n "$WIN_CSC_LINK" ]] || missing+=(WIN_CSC_LINK)
-          [[ -n "$WIN_CSC_KEY_PASSWORD" ]] || missing+=(WIN_CSC_KEY_PASSWORD)
-          [[ -n "$CSC_LINK" ]] || missing+=(CSC_LINK)
-          [[ -n "$CSC_KEY_PASSWORD" ]] || missing+=(CSC_KEY_PASSWORD)
-          [[ -n "$APPLE_ID" ]] || missing+=(APPLE_ID)
-          [[ -n "$APPLE_APP_SPECIFIC_PASSWORD" ]] || missing+=(APPLE_APP_SPECIFIC_PASSWORD)
-          [[ -n "$APPLE_TEAM_ID" ]] || missing+=(APPLE_TEAM_ID)
-          if ((${#missing[@]})); then
-            echo "Tagged public releases require signing/notarization secrets: ${missing[*]}" >&2
-            exit 1
-          fi
 
   build-windows:
     name: Build — Windows
@@ -160,12 +136,11 @@ jobs:
       - name: Prepare Electron binary
         run: npm run prepare:electron
 
-      - name: Package and publish signed Windows installer
-        run: npm run package:win -- --publish always --config.forceCodeSigning=true --config.publish.channel="${{ needs.resolve-channel.outputs.channel }}"
+      - name: Package and publish unsigned Windows installer
+        run: npm run package:win -- --publish always --config.publish.channel="${{ needs.resolve-channel.outputs.channel }}"
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
-          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
-          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
       - name: Verify Windows update metadata
         shell: bash
@@ -210,16 +185,11 @@ jobs:
       - name: Prepare Electron binary
         run: npm run prepare:electron
 
-      - name: Package, publish, sign, and notarize macOS installer
-        run: npm run package:mac -- --publish always --config.forceCodeSigning=true --config.publish.channel="${{ needs.resolve-channel.outputs.channel }}"
+      - name: Package and publish unsigned macOS installer
+        run: npm run package:mac -- --publish always --config.publish.channel="${{ needs.resolve-channel.outputs.channel }}"
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          CSC_IDENTITY_AUTO_DISCOVERY: "true"
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
       - name: Verify macOS update metadata
         shell: bash

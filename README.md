@@ -33,7 +33,7 @@ Download the latest installer from [Releases](https://github.com/MyFTB/launcher-
 | macOS (Apple Silicon) | `MyFTB-Launcher-x.x.x-arm64.dmg` |
 | Linux | `MyFTB-Launcher-x.x.x.AppImage` or `.deb` |
 
-Official Windows and macOS releases use the signing and notarization release workflow. Local and dry-run packages are unsigned.
+Windows and macOS releases are currently unsigned. The operating system can show a security warning when users install or open them.
 
 ## Development
 
