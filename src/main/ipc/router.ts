@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, shell, type OpenDialogOptions } from 'electron'
+import { app, BrowserWindow, dialog, shell } from 'electron'
 import { join } from 'node:path'
 import os from 'node:os'
 import fs from 'node:fs/promises'
@@ -36,6 +36,12 @@ import {
 } from '../bootstrap'
 import { assertAllowedExternalUrl } from '../security/url-policy'
 import { hardenBrowserWindow, wireMaximizeEvents } from '../security/window-security'
+import { getWindowFrameOptions } from '../window-options'
+import {
+  getDataDirectoryDialogOptions,
+  getRecoveryDirectoryDialogOptions,
+  getStorageDirectoryDialogOptions,
+} from './dialog-options'
 
 function targetDirPayload(value: unknown): { targetDir: string } {
   const payload = requireObject(value)
@@ -95,10 +101,7 @@ export async function registerIpcHandlers(): Promise<void> {
   )
   secureHandle(IpcChannels.CONFIG_PICK_DIR, { validate: noPayload }, async () => {
     const window = getMainWindow()
-    const options: OpenDialogOptions = {
-      title: 'Bitte wähle den Speicherort für installierte Modpacks',
-      properties: ['openDirectory', 'createDirectory'],
-    }
+    const options = getStorageDirectoryDialogOptions(configService.getResourceDir())
     const result = window
       ? await dialog.showOpenDialog(window, options)
       : await dialog.showOpenDialog(options)
@@ -109,10 +112,7 @@ export async function registerIpcHandlers(): Promise<void> {
   })
   secureHandle(IpcChannels.CONFIG_CHANGE_DATA_DIR, { validate: noPayload }, async () => {
     const window = getMainWindow()
-    const options: OpenDialogOptions = {
-      title: 'Neuen Speicherort für Launcher-Daten wählen',
-      properties: ['openDirectory', 'createDirectory'],
-    }
+    const options = getDataDirectoryDialogOptions(app.getPath('userData'))
     const result = window
       ? await dialog.showOpenDialog(window, options)
       : await dialog.showOpenDialog(options)
@@ -186,10 +186,7 @@ export async function registerIpcHandlers(): Promise<void> {
         let target = payload.dataDir
         if (!target) {
           const parent = getMainWindow()
-          const options: OpenDialogOptions = {
-            title: 'Vorhandenen MyFTB-Datenordner auswählen',
-            properties: ['openDirectory'],
-          }
+          const options = getRecoveryDirectoryDialogOptions(app.getPath('userData'))
           const result = parent
             ? await dialog.showOpenDialog(parent, options)
             : await dialog.showOpenDialog(options)
@@ -282,7 +279,7 @@ export async function registerIpcHandlers(): Promise<void> {
         height: 580,
         minWidth: 600,
         minHeight: 300,
-        frame: process.platform === 'darwin',
+        ...getWindowFrameOptions(process.platform),
         ...(process.platform === 'darwin' ? { titleBarStyle: 'hidden' as const } : {}),
         backgroundColor: '#1a1a1a',
         title: 'Konsole — MyFTB Launcher',

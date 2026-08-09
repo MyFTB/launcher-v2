@@ -35,6 +35,7 @@ import {
 import { logger } from './logger'
 import { assertPackName } from '../shared/validation'
 import { hardenBrowserWindow, wireMaximizeEvents } from './security/window-security'
+import { getWindowFrameOptions } from './window-options'
 
 let initialPackArg: string | null = null
 const packArgIndex = process.argv.findIndex((value) => value === '--pack' || value === '-p')
@@ -55,7 +56,7 @@ function createWindow(): void {
     height: 680,
     minWidth: 900,
     minHeight: 600,
-    frame: isMac,
+    ...getWindowFrameOptions(process.platform),
     backgroundColor: '#1a1a1a',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
