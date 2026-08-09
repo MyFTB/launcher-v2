@@ -8,8 +8,10 @@
     "npm": ">=11.16.0 <13"
   },
   "scripts": {
+    "predev": "install-electron",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
+    "prepreview": "install-electron",
     "preview": "electron-vite preview",
     "postinstall": "node scripts/repair-xmcl.cjs",
     "prepare:electron": "install-electron",

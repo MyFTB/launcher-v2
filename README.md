@@ -55,7 +55,7 @@ npm ci --strict-peer-deps
 npm run prepare:electron
 ```
 
-Electron 42 and later download their binary on demand. Run `npm run prepare:electron` after each clean install.
+Electron 42 and later download their binary on demand. `npm run dev` and `npm run preview` prepare it automatically; use `npm run prepare:electron` explicitly before packaging or direct build jobs.
 
 ### Commands
 

@@ -12,7 +12,7 @@ npm ci --strict-peer-deps
 npm run prepare:electron
 ```
 
-Electron 43 downloads its binary on demand. Run the preparation script after each clean install.
+Electron 43 downloads its binary on demand. Development and preview scripts prepare it automatically; run the preparation script explicitly before packaging or direct build jobs.
 
 ## Commands
 

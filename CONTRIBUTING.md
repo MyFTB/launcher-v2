@@ -13,7 +13,7 @@ npm run prepare:electron
 npm run dev
 ```
 
-Use `npm ci`, not `npm install`, for a clean checkout. Electron 43 downloads its binary through the explicit preparation command.
+Use `npm ci`, not `npm install`, for a clean checkout. Electron 43 downloads its binary through the explicit preparation command; development and preview scripts also prepare it automatically.
 
 ## Before you open a pull request
 
