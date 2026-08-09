@@ -577,6 +577,6 @@ export async function ensureRuntime(
     await operation
     return { total, finished, failed }
   } finally {
-    if (runtimeFlights.get(effectiveRuntime) === operation) runtimeFlights.delete(effectiveRuntime)
+    if (Object.is(runtimeFlights.get(effectiveRuntime), operation)) runtimeFlights.delete(effectiveRuntime)
   }
 }

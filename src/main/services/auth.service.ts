@@ -348,7 +348,7 @@ class AuthService {
     try {
       return await operation
     } finally {
-      if (this.refreshFlights.get(summary.uuid) === operation) this.refreshFlights.delete(summary.uuid)
+      if (Object.is(this.refreshFlights.get(summary.uuid), operation)) this.refreshFlights.delete(summary.uuid)
     }
   }
 

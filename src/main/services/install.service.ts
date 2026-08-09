@@ -839,7 +839,7 @@ export async function recoverInterruptedTransactions(instanceDir: string): Promi
   try {
     await operation
   } finally {
-    if (transactionRecoveryFlights.get(key) === operation) transactionRecoveryFlights.delete(key)
+    if (Object.is(transactionRecoveryFlights.get(key), operation)) transactionRecoveryFlights.delete(key)
   }
 }
 
@@ -1173,7 +1173,7 @@ class InstallService {
       return await operation
     } finally {
       packOperationService.endMutation(payload.packName, owner)
-      if (this.currentOperation === operation) this.currentOperation = null
+      if (Object.is(this.currentOperation, operation)) this.currentOperation = null
     }
   }
 
@@ -1231,7 +1231,7 @@ class InstallService {
     } finally {
       packOperationService.endMutation(manifest.name, owner)
       if (this.currentAbort === abort) this.currentAbort = null
-      if (this.currentOperation === operation) this.currentOperation = null
+      if (Object.is(this.currentOperation, operation)) this.currentOperation = null
     }
   }
 
@@ -1752,7 +1752,7 @@ class InstallService {
         return result
       } finally {
         if (this.currentAbort === abort) this.currentAbort = null
-        if (this.currentOperation === operation) this.currentOperation = null
+        if (Object.is(this.currentOperation, operation)) this.currentOperation = null
       }
     } finally {
       packOperationService.endMutation(packName, owner)

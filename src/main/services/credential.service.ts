@@ -56,7 +56,7 @@ class CredentialService {
       // initialization and persistence with the still-intact legacy config.
       throw error
     } finally {
-      if (this.initialization === operation) this.initialization = null
+      if (Object.is(this.initialization, operation)) this.initialization = null
     }
   }
 
