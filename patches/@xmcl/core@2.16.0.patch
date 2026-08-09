@@ -1,0 +1,55 @@
+--- /dev/null	
++++ b/index.ts/index.d.ts	
+@@ -0,0 +1,1 @@
++export * from '../dist/index'
+--- /dev/null	
++++ b/index.ts/index.js	
+@@ -0,0 +1,1 @@
++module.exports = require('../dist/index.js')
+--- /dev/null	
++++ b/index.ts/package.json	
+@@ -0,0 +1,3 @@
++{
++  "main": "index.js"
++}
+--- /dev/null	
++++ b/utils.d.ts	
+@@ -0,0 +1,1 @@
++export * from './dist/utils'
+--- /dev/null	
++++ b/utils.js	
+@@ -0,0 +1,34 @@
++const { createHash } = require('node:crypto')
++const { constants, createReadStream } = require('node:fs')
++const { access } = require('node:fs/promises')
++const { pipeline } = require('node:stream/promises')
++
++function exists(file) {
++  return access(file, constants.F_OK).then(
++    () => true,
++    () => false,
++  )
++}
++
++async function checksum(target, algorithm) {
++  const hash = createHash(algorithm).setEncoding('hex')
++  try {
++    await pipeline(createReadStream(target), hash)
++  } catch (error) {
++    if (error && error.code === 'ENOENT') return undefined
++    throw error
++  }
++  return hash.read()
++}
++
++async function validateSha1(target, expected, strict = false) {
++  if (!await exists(target)) return false
++  if (!expected) return !strict
++  return await checksum(target, 'sha1') === expected
++}
++
++function isNotNull(value) {
++  return value !== undefined
++}
++
++module.exports = { checksum, exists, isNotNull, validateSha1 }

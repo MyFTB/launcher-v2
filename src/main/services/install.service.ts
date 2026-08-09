@@ -4,10 +4,10 @@ import crypto, { randomUUID } from 'node:crypto'
 import { setMaxListeners } from 'node:events'
 
 import {
-  install as installMinecraft,
+  installMinecraft,
   getVersionList,
   installForge,
-  installNeoForged,
+  installNeoForge,
   installFabric,
   installResolvedLibraries,
   installAssets,
@@ -25,6 +25,7 @@ import { atomicWriteFile, configService } from './config.service'
 import { getMainWindow } from '../app-state'
 import { packOperationService, PackOperationConflictError } from './pack-operation.service'
 import { ensureRuntime, resolveJavaPath } from './java.service'
+import { buildForgeEntry, detectModLoader, extractMavenVersion } from './install-helpers'
 import { logger } from '../logger'
 import {
   assertContainedNoLinks,
@@ -56,10 +57,6 @@ import {
   validateModpackReference,
   ValidationError,
 } from '../../shared/validation'
-
-// ─── Types ───────────────────────────────────────────────────────────────────
-
-type ModLoader = 'forge' | 'neoforge' | 'fabric' | 'quilt' | 'vanilla'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -223,117 +220,6 @@ async function writeSelectedFeatures(
 ): Promise<void> {
   const filePath = path.join(instanceDir, SELECTED_FEATURES_FILE)
   await atomicWriteFile(filePath, `${JSON.stringify(selectedFeatures, null, 2)}\n`)
-}
-
-/**
- * Detect the mod loader used by a modpack.
- *
- * Priority:
- *  1. versionManifest.libraries — checks net.neoforged / net.minecraftforge:forge specifically
- *  2. versionManifest.id — for packs whose versionManifest omits the libraries array entirely;
- *     the ID pattern "{mc}-forge-{ver}" or "{mc}-neoforge-{ver}" is always present.
- *  3. fabric-loader- / quilt-loader- ID prefix.
- *
- * Returns the loader type and the library name to pass to buildForgeEntry / installNeoForged.
- * For library-absent packs a synthetic coordinate is synthesised from the version ID.
- */
-function detectModLoader(manifest: ModpackManifest): {
-  loader: ModLoader
-  libraryName: string | null
-} {
-  const libraries = manifest.versionManifest.libraries ?? []
-  const versionId = manifest.versionManifest.id ?? ''
-
-  // ── 1. Library scan (most reliable when libraries are present) ────────────
-  for (const lib of libraries) {
-    if (lib.name.includes('net.neoforged:neoforge:') || lib.name.includes('net.neoforged:forge:')) {
-      return { loader: 'neoforge', libraryName: lib.name }
-    }
-  }
-
-  for (const lib of libraries) {
-    if (lib.name.includes('net.minecraftforge:forge:')) {
-      return { loader: 'forge', libraryName: lib.name }
-    }
-  }
-
-  // ── 2. Version ID fallback (handles packs with no libraries array) ────────
-  // Patterns: "{mcVersion}-forge-{forgeVersion}"  e.g. 1.20.1-forge-47.4.0
-  //           "{mcVersion}-neoforge-{forgeVersion}" e.g. 1.20.1-neoforge-47.1.0
-  //           "neoforge-{forgeVersion}"             e.g. neoforge-21.1.219
-  const idMatch = versionId.match(/^(\d+\.\d+(?:\.\d+)?)-(?:(neoforge)|(forge))-(.+)$/)
-  if (idMatch) {
-    const [, mcVersion, neoToken, , forgeVersion] = idMatch
-    if (neoToken) {
-      return { loader: 'neoforge', libraryName: `net.neoforged:neoforge:${forgeVersion}` }
-    }
-    // net.minecraftforge:forge:{mcVersion}-{forgeVersion} — modern format
-    return { loader: 'forge', libraryName: `net.minecraftforge:forge:${mcVersion}-${forgeVersion}` }
-  }
-
-  // Short-form NeoForge ID with no MC-version prefix, e.g. "neoforge-21.1.219"
-  const neoShortMatch = versionId.match(/^neoforge-(.+)$/)
-  if (neoShortMatch) {
-    return { loader: 'neoforge', libraryName: `net.neoforged:neoforge:${neoShortMatch[1]}` }
-  }
-
-  // ── 3. Fabric / Quilt by ID prefix ────────────────────────────────────────
-  if (versionId.startsWith('fabric-loader-')) {
-    return { loader: 'fabric', libraryName: versionId }
-  }
-
-  if (versionId.startsWith('quilt-loader-')) {
-    return { loader: 'quilt', libraryName: versionId }
-  }
-
-  return { loader: 'vanilla', libraryName: null }
-}
-
-/**
- * Extract the version portion from a Maven coordinate string.
- * e.g. 'net.minecraftforge:forge:1.20.1-47.2.0' → '1.20.1-47.2.0'
- * e.g. 'net.neoforged:neoforge:21.1.0'           → '21.1.0'
- */
-function extractMavenVersion(libraryName: string): string {
-  const parts = libraryName.split(':')
-  if (parts.length < 3) {
-    throw new Error(`Cannot extract version from Maven coordinate: ${libraryName}`)
-  }
-  return parts[2]
-}
-
-/**
- * Build the forge entry `{ mcversion, version }` that @xmcl/installer's
- * `installForge` expects.
- *
- * `installForge` internally runs `getForgeArtifactVersion()` which behaves as:
- *   - MC 1.7.x / 1.8.x  →  `{mcversion}-{version}-{mcversion}`
- *   - version starts with mcversion  →  `version`
- *   - otherwise  →  `{mcversion}-{version}`
- *
- * The library name in the pack manifest stores the full Maven artifact version
- * (e.g. `1.7.10-10.13.4.1614-1.7.10`), but for 1.7.x/1.8.x installForge
- * expects only the bare build number (`10.13.4.1614`) in the `version` field.
- * For modern Forge the full Maven artifact version is used as-is.
- */
-function buildForgeEntry(
-  mcversion: string,
-  libraryName: string,
-): { mcversion: string; version: string } {
-  const mavenVersion = extractMavenVersion(libraryName)
-  const minor = parseInt(mcversion.split('.')[1] ?? '0', 10)
-
-  // For MC 1.7.x/1.8.x the Maven artifact is '{mc}-{buildNum}-{mc}'.
-  // Strip the wrapping mc-version so installForge gets just '{buildNum}'.
-  if (minor >= 7 && minor <= 8) {
-    const prefix = `${mcversion}-`
-    const suffix = `-${mcversion}`
-    if (mavenVersion.startsWith(prefix) && mavenVersion.endsWith(suffix)) {
-      return { mcversion, version: mavenVersion.slice(prefix.length, mavenVersion.length - suffix.length) }
-    }
-  }
-
-  return { mcversion, version: mavenVersion }
 }
 
 /**
@@ -1330,7 +1216,7 @@ class InstallService {
         currentFile: `NeoForge ${neoforgeVersion} wird installiert...`,
       } satisfies InstallProgressEvent)
 
-      await installNeoForged('neoforge', neoforgeVersion, minecraftDir, { java: javaPath, dispatcher: xmclDownloadDispatcher })
+      await installNeoForge('neoforge', neoforgeVersion, minecraftDir, { java: javaPath, dispatcher: xmclDownloadDispatcher })
 
       // installNeoForged creates the version JSON under the installer's own ID
       // (e.g. '1.21.1-neoforge-21.1.219'), but manifest.versionManifest.id may
