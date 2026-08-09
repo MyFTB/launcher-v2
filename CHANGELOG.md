@@ -3,6 +3,33 @@
 All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [2.3.0-experimental.1] — 2026-08-09
+
+### 🐛 Bug Fixes
+
+- Allow closing completed console tabs
+- Allow unsigned public builds
+- Bind validated reads to file descriptors
+- Clarify promise identity checks
+- Prepare Electron before development
+- Preserve Electron 43 window behavior
+- Redact diagnostic uploads
+- Restore MyFTB manifest compatibility
+- Support Node-bundled npm
+- Use published macOS runtime layout
+
+### 📚 Documentation
+
+- Document stable compatibility policy
+- Update CHANGELOG.md for v2.2.0 [skip ci]
+
+### 🚀 Features
+
+- Add Minecraft version filters
+- Add recovery UI and session-aware consoles
+- Make modpack installs resumable and transactional
+- Secure IPC persistence authentication and updates
+- Support concurrent launch sessions
 ## [2.2.0] — 2026-04-12
 
 ### 📚 Documentation
