@@ -1,7 +1,3 @@
-# Tagged release workflow. A public release is created only after the shared
-# quality gate, version/signing preflight, and all platform packages succeed.
-# Local/PR packaging remains deliberately unsigned (see build.yml).
-
 name: Release
 
 on:
@@ -12,9 +8,6 @@ on:
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
-
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   resolve-channel:
@@ -33,8 +26,6 @@ jobs:
             echo "channel=latest" >> "$GITHUB_OUTPUT"
           fi
 
-  # This is the release gate for platform-independent checks. Platform jobs
-  # cannot start unless every check, including the packaging smoke test, passes.
   quality-gate:
     name: Release quality gate
     runs-on: ubuntu-latest
@@ -42,16 +33,30 @@ jobs:
       contents: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Set up Node.js (LTS)
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "lts/*"
+          node-version-file: .nvmrc
           cache: npm
 
+      - name: Install npm 12.0.2
+        run: npm install --global npm@12.0.2
+
+      - name: Print tool versions
+        run: |
+          node --version
+          npm --version
+
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --strict-peer-deps
+
+      - name: Validate dependency tree
+        run: npm ls --all
+
+      - name: Prepare Electron binary
+        run: npm run prepare:electron
 
       - name: Audit production dependencies
         run: npm run audit:production
@@ -71,11 +76,9 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Package smoke test (unsigned, no publish)
-        run: npx electron-builder --dir --publish never
+      - name: Package smoke test (no publish)
+        run: npm run package -- --dir --publish never
 
-  # Check the immutable tag points at the version being built and refuse a
-  # public tag release unless both desktop signing pipelines are configured.
   release-preflight:
     name: Verify tag and release credentials
     runs-on: ubuntu-latest
@@ -83,12 +86,20 @@ jobs:
       contents: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "lts/*"
+          node-version-file: .nvmrc
+
+      - name: Install npm 12.0.2
+        run: npm install --global npm@12.0.2
+
+      - name: Print tool versions
+        run: |
+          node --version
+          npm --version
 
       - name: Verify tag matches package.json
         shell: bash
@@ -133,22 +144,33 @@ jobs:
       contents: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Set up Node.js (LTS)
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "lts/*"
+          node-version-file: .nvmrc
           cache: npm
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Install npm 12.0.2
+        run: npm install --global npm@12.0.2
 
-      - name: Build
-        run: npm run build
+      - name: Print tool versions
+        run: |
+          node --version
+          npm --version
+
+      - name: Install dependencies
+        run: npm ci --strict-peer-deps
+
+      - name: Validate dependency tree
+        run: npm ls --all
+
+      - name: Prepare Electron binary
+        run: npm run prepare:electron
 
       - name: Package and publish signed Windows installer
-        run: npx electron-builder --win --publish always --config.forceCodeSigning=true --config.publish.channel="${{ needs.resolve-channel.outputs.channel }}"
+        run: npm run package:win -- --publish always --config.forceCodeSigning=true --config.publish.channel="${{ needs.resolve-channel.outputs.channel }}"
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
@@ -163,10 +185,7 @@ jobs:
           version="${VERSION#v}"
           file="dist/${CHANNEL}.yml"
           test -f "$file" || { echo "Expected Windows update metadata $file was not generated" >&2; exit 1; }
-          grep -Eq "^version: ['\"]?${version}['\"]?$" "$file" || {
-            echo "Metadata version mismatch in $file" >&2
-            exit 1
-          }
+          grep -Eq "^version: ['\"]?${version}['\"]?$" "$file" || { echo "Metadata version mismatch in $file" >&2; exit 1; }
           grep -Eq '^path: .+' "$file" || { echo "Missing artifact path in $file" >&2; exit 1; }
           grep -Eq '^sha512: .+' "$file" || { echo "Missing sha512 in $file" >&2; exit 1; }
 
@@ -178,22 +197,33 @@ jobs:
       contents: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Set up Node.js (LTS)
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "lts/*"
+          node-version-file: .nvmrc
           cache: npm
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Install npm 12.0.2
+        run: npm install --global npm@12.0.2
 
-      - name: Build
-        run: npm run build
+      - name: Print tool versions
+        run: |
+          node --version
+          npm --version
+
+      - name: Install dependencies
+        run: npm ci --strict-peer-deps
+
+      - name: Validate dependency tree
+        run: npm ls --all
+
+      - name: Prepare Electron binary
+        run: npm run prepare:electron
 
       - name: Package, publish, sign, and notarize macOS installer
-        run: npx electron-builder --mac --publish always --config.forceCodeSigning=true --config.publish.channel="${{ needs.resolve-channel.outputs.channel }}"
+        run: npm run package:mac -- --publish always --config.forceCodeSigning=true --config.publish.channel="${{ needs.resolve-channel.outputs.channel }}"
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
           CSC_LINK: ${{ secrets.CSC_LINK }}
@@ -212,10 +242,7 @@ jobs:
           version="${VERSION#v}"
           file="dist/${CHANNEL}-mac.yml"
           test -f "$file" || { echo "Expected macOS update metadata $file was not generated" >&2; exit 1; }
-          grep -Eq "^version: ['\"]?${version}['\"]?$" "$file" || {
-            echo "Metadata version mismatch in $file" >&2
-            exit 1
-          }
+          grep -Eq "^version: ['\"]?${version}['\"]?$" "$file" || { echo "Metadata version mismatch in $file" >&2; exit 1; }
           grep -Eq '^path: .+' "$file" || { echo "Missing artifact path in $file" >&2; exit 1; }
           grep -Eq '^sha512: .+' "$file" || { echo "Missing sha512 in $file" >&2; exit 1; }
 
@@ -229,22 +256,33 @@ jobs:
       attestations: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Set up Node.js (LTS)
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "lts/*"
+          node-version-file: .nvmrc
           cache: npm
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Install npm 12.0.2
+        run: npm install --global npm@12.0.2
 
-      - name: Build
-        run: npm run build
+      - name: Print tool versions
+        run: |
+          node --version
+          npm --version
+
+      - name: Install dependencies
+        run: npm ci --strict-peer-deps
+
+      - name: Validate dependency tree
+        run: npm ls --all
+
+      - name: Prepare Electron binary
+        run: npm run prepare:electron
 
       - name: Package and publish Linux installers
-        run: npx electron-builder --linux --publish always --config.publish.channel="${{ needs.resolve-channel.outputs.channel }}"
+        run: npm run package:linux -- --publish always --config.publish.channel="${{ needs.resolve-channel.outputs.channel }}"
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
 
@@ -255,19 +293,14 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           file="dist/${CHANNEL}-linux.yml"
           test -f "$file" || { echo "Expected Linux update metadata $file was not generated" >&2; exit 1; }
-          grep -Eq "^version: ['\"]?${version}['\"]?$" "$file" || {
-            echo "Metadata version mismatch in $file" >&2
-            exit 1
-          }
+          grep -Eq "^version: ['\"]?${version}['\"]?$" "$file" || { echo "Metadata version mismatch in $file" >&2; exit 1; }
           grep -Eq '^path: .+' "$file" || { echo "Missing artifact path in $file" >&2; exit 1; }
           grep -Eq '^sha512: .+' "$file" || { echo "Missing sha512 in $file" >&2; exit 1; }
-          find dist -maxdepth 1 -type f \
-            ! -name SHA256SUMS.txt ! -name SBOM.cdx.json \
-            -print0 | sort -z | xargs -0 sha256sum > dist/SHA256SUMS.txt
+          find dist -maxdepth 1 -type f ! -name SHA256SUMS.txt ! -name SBOM.cdx.json -print0 | sort -z | xargs -0 sha256sum > dist/SHA256SUMS.txt
           npm sbom --sbom-format cyclonedx --sbom-type application > dist/SBOM.cdx.json
 
       - name: Upload Linux checksums and SBOM
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-linux-${{ github.ref_name }}
           path: |
@@ -276,7 +309,7 @@ jobs:
           if-no-files-found: error
 
       - name: Attest Linux packages, checksums, and SBOM
-        uses: actions/attest-build-provenance@c074443f1aee8d4aeeae555aebba3282517141b2 # v2.2.3
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
             dist/*.AppImage
@@ -293,20 +326,19 @@ jobs:
       contents: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           token: ${{ secrets.GH_TOKEN || github.token }}
 
-      # Platform installers and channel metadata are uploaded by electron-builder
-      # above. Only supplemental Linux security metadata needs a later upload.
       - name: Download Linux checksums and SBOM
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-linux-${{ github.ref_name }}
           path: release-assets/linux
+
       - name: Generate release notes
-        uses: orhun/git-cliff-action@e16f179f0be49ecdfe63753837f20b9531642772 # v4.7.0
+        uses: orhun/git-cliff-action@f50e11560dce63f7c33227798f90b924471a88b5 # v4.8.0
         with:
           config: cliff.toml
           args: --latest --strip header
@@ -315,7 +347,7 @@ jobs:
           GITHUB_REPO: ${{ github.repository }}
 
       - name: Update CHANGELOG.md
-        uses: orhun/git-cliff-action@e16f179f0be49ecdfe63753837f20b9531642772 # v4.7.0
+        uses: orhun/git-cliff-action@f50e11560dce63f7c33227798f90b924471a88b5 # v4.8.0
         with:
           config: cliff.toml
           args: --output CHANGELOG.md
