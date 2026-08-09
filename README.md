@@ -13,18 +13,18 @@
 
 ## Features
 
-- 🗂 **Browse & install** modpacks from the MyFTB pack library
-- 🚀 **One-click launch** — Forge & NeoForge handled automatically
-- 🔐 **Microsoft authentication** via OAuth 2.0
-- 🔄 **Auto-updates** — the launcher keeps itself up to date
-- 🎮 **Discord Rich Presence** — shows what pack you're playing
-- 🖥 **Cross-platform** — Windows, macOS, Linux
-- ⚡ **Optional features** — pick which mods to include per pack
-- 📋 **In-app console** — live log viewer with crash upload
+- 🗂 **Browse and install** modpacks from the MyFTB pack library
+- 🚀 **One-click launch** for Forge, NeoForge, Fabric, and Quilt
+- 🔐 **Microsoft authentication** through OAuth 2.0
+- 🔄 **Automatic updates** for stable and experimental channels
+- 🎮 **Discord Rich Presence** for the active modpack
+- 🖥 **Cross-platform support** for Windows, macOS, and Linux
+- ⚡ **Optional features** for each modpack
+- 📋 **In-app console** with live logs and crash upload
 
 ## Installation
 
-Download the latest installer for your platform from [Releases](https://github.com/MyFTB/launcher-v2/releases/latest):
+Download the latest installer from [Releases](https://github.com/MyFTB/launcher-v2/releases/latest):
 
 | Platform | File |
 |---|---|
@@ -33,53 +33,77 @@ Download the latest installer for your platform from [Releases](https://github.c
 | macOS (Apple Silicon) | `MyFTB-Launcher-x.x.x-arm64.dmg` |
 | Linux | `MyFTB-Launcher-x.x.x.AppImage` or `.deb` |
 
-> **Note:** Windows and macOS builds are not currently code-signed. You may need to allow the app through your OS security prompt on first launch.
+Official Windows and macOS releases use the signing and notarization release workflow. Local and dry-run packages are unsigned.
 
 ## Development
 
 ### Prerequisites
 
-- [Node.js](https://nodejs.org/) LTS
+- [Node.js](https://nodejs.org/) `24.18.1`
+- npm `12.0.2`
 - [Git](https://git-scm.com/)
+
+The `.nvmrc` file selects the required Node.js version. The `packageManager` field records the required npm version.
 
 ### Setup
 
 ```bash
 git clone https://github.com/MyFTB/launcher-v2.git
 cd launcher-v2
-npm install
+nvm use
+npm install --global npm@12.0.2
+npm ci --strict-peer-deps
+npm run prepare:electron
 ```
+
+Electron 42 and later download their binary on demand. Run `npm run prepare:electron` after each clean install.
 
 ### Commands
 
 ```bash
-npm run dev          # Start the app with hot-reload
-npm run build        # Production build → out/
-npm run test         # Run all tests
-npm run lint         # ESLint
-npm run type-check   # TypeScript type checking
-npm run package      # Build + create installers
+npm run dev             # Start the app with hot reload
+npm run build           # Build the production app in out/
+npm run test            # Run all tests
+npm run lint            # Run ESLint
+npm run type-check      # Check main and renderer TypeScript
+npm run package         # Build and create installers
+npm run audit:production
+npm run audit:full
 ```
+
+### Dependency policy
+
+Direct dependencies, development tools, and GitHub Actions use stable releases only. Do not add prerelease versions to these lists.
+
+Stable parent packages can require transitive prereleases. Lockfile changes must explain each new transitive prerelease.
+
+The current compatibility holds are intentional:
+
+- `electron-vite@5` supports Vite through version 7, so Vite 8 remains held.
+- `@vitejs/plugin-react@6` requires Vite 8, so plugin-react remains on version 5.
+- `typescript-eslint@8.66` supports TypeScript below 6.1, so TypeScript 7 remains held.
+- Node types remain on version 24 to match Node 24 and Electron 43.
+- XMCL uses the `undici-xmcl` alias on Undici 7. Launcher HTTP uses Undici 8.
+
+These holds are the only expected direct results from `npm outdated`. The XMCL 6.3.1 release has invalid workspace and entrypoint metadata. Narrow overrides and npm patches repair that release until XMCL publishes a fixed stable version.
 
 ### Project structure
 
-```
+```text
 src/
-├── main/          # Electron main process (Node.js)
-│   ├── ipc/       # IPC channel constants + router
-│   └── services/  # Auth, install, launch, discord, update…
-├── preload/       # contextBridge — typed API exposed to renderer
-├── renderer/      # React UI (Vite + Tailwind CSS)
-│   ├── components/
-│   └── pages/
-├── shared/        # Types shared across all three processes
-└── tests/         # Vitest unit tests (pure logic)
+├── main/          # Electron main process
+│   ├── ipc/       # IPC channels, validation, and routing
+│   └── services/  # Authentication, install, launch, Discord, and updates
+├── preload/       # Typed contextBridge API
+├── renderer/      # React UI with Vite and Tailwind CSS
+├── shared/        # Shared types and pure runtime validation
+└── tests/         # Vitest tests for pure and Node logic
 ```
 
 ## Contributing
 
-Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before you open a pull request.
 
 ## License
 
-This project is licensed under the **GNU General Public License v3.0** — see [LICENSE](LICENSE) for details.
+The project uses the [GNU General Public License v3.0](LICENSE).
