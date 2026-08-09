@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import type { ModpackManifestReference, InstallProgressEvent, InstallResult, Feature, ChangeFeaturesResult, PackFeaturesResult } from '@shared/types'
 import ModpackCard from '../components/ModpackCard'
+import MinecraftVersionSelect from '../components/MinecraftVersionSelect'
 import ContextMenu from '../components/ContextMenu'
 import PackSettingsModal from '../components/PackSettingsModal'
 import ProgressModal from '../components/ProgressModal'
@@ -9,6 +10,11 @@ import DeleteConfirmModal from '../components/DeleteConfirmModal'
 import { useNavigate } from 'react-router-dom'
 import { useLaunchStore } from '../store/launch.store'
 import { useModpackStore } from '../store/modpack.store'
+import {
+  filterPacksByMinecraftVersion,
+  getMinecraftVersionOptions,
+  isMinecraftVersionSelectionValid,
+} from '../utils/modpackFilters'
 
 interface ContextMenuState {
   x: number
@@ -24,6 +30,7 @@ export default function InstalledPacks() {
   const [loading, setLoading] = useState(true)
   const [reloading, setReloading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [selectedVersion, setSelectedVersion] = useState<string | null>(null)
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [packSettingsTarget, setPackSettingsTarget] = useState<string | null>(null)
   const [uploadMessage, setUploadMessage] = useState<string | null>(null)
@@ -412,6 +419,21 @@ export default function InstalledPacks() {
     ]
   }, [contextMenu?.packName, packs, updateMap, featuresMap, activePackNames, activeSessions, changingFeaturesPack, updatingPack, handleUpdate, handleRepairPack, handleUploadCrash, handleDelete, handleChangeFeatures])
 
+  const versionOptions = useMemo(
+    () => getMinecraftVersionOptions(packs),
+    [packs],
+  )
+  const filteredPacks = useMemo(
+    () => filterPacksByMinecraftVersion(packs, selectedVersion),
+    [packs, selectedVersion],
+  )
+
+  useEffect(() => {
+    if (!isMinecraftVersionSelectionValid(selectedVersion, versionOptions)) {
+      setSelectedVersion(null)
+    }
+  }, [selectedVersion, versionOptions])
+
   const isGameRunning = activeSessions.length > 0
   const updateCount = Object.values(updateMap).filter(Boolean).length
 
@@ -458,6 +480,18 @@ export default function InstalledPacks() {
         </div>
       </div>
 
+      <div className="mb-6">
+        <MinecraftVersionSelect
+          id="installed-minecraft-version"
+          value={selectedVersion}
+          options={versionOptions}
+          totalCount={packs.length}
+          onChange={setSelectedVersion}
+          disabled={packs.length === 0}
+          loading={loading || reloading}
+        />
+      </div>
+
       {/* Upload message toast */}
       {uploadMessage && (
         <div className="mb-4 px-4 py-3 rounded-lg bg-bg-elevated border border-border text-sm text-text-primary animate-fade-in">
@@ -499,9 +533,22 @@ export default function InstalledPacks() {
             Modpacks entdecken
           </button>
         </div>
+      ) : filteredPacks.length === 0 ? (
+        <div className="card px-6 py-16 text-center">
+          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-bg-elevated">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} aria-hidden="true" className="h-6 w-6 text-text-muted">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+            </svg>
+          </div>
+          <p className="text-sm font-medium text-text-secondary">Keine installierten Modpacks für diese Version.</p>
+          <p className="mt-1 text-xs text-text-muted">Setze den Filter zurück, um alle installierten Modpacks zu sehen.</p>
+          <button className="btn-ghost mt-4" onClick={() => setSelectedVersion(null)}>
+            Filter zurücksetzen
+          </button>
+        </div>
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-4">
-          {packs.map((pack, i) => (
+          {filteredPacks.map((pack, i) => (
             <div key={pack.name} className="animate-slide-up" style={{ animationDelay: `${Math.min(i, 8) * 40}ms`, animationFillMode: 'backwards' }}>
             <ModpackCard
               manifest={pack}
