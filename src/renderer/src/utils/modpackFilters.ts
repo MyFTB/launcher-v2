@@ -1,8 +1,35 @@
-import type { ModpackManifestReference } from '@shared/types'
+import type { InstalledPackSummary, ModpackManifestReference } from '@shared/types'
 
 export interface MinecraftVersionOption {
   value: string
   count: number
+}
+
+export type InstalledPackView = InstalledPackSummary & {
+  /** Trusted package-list reference used for an available update. */
+  updateReference?: ModpackManifestReference
+}
+
+/**
+ * Combine local installed metadata with trusted package-list references.
+ * A release-era local manifest may have no location; it still remains visible,
+ * while update actions are exposed only when a matching remote reference exists.
+ */
+export function mergeInstalledPacks(
+  installed: readonly InstalledPackSummary[],
+  remote: readonly ModpackManifestReference[],
+): InstalledPackView[] {
+  const remoteByName = new Map(remote.map((pack) => [pack.name, pack]))
+  return installed.map((local) => {
+    const reference = remoteByName.get(local.name)
+    return {
+      ...local,
+      ...(reference ?? {}),
+      ...(reference && reference.version !== local.version
+        ? { updateReference: reference }
+        : {}),
+    }
+  })
 }
 
 const minecraftVersionCollator = new Intl.Collator('en-US', {

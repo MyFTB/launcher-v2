@@ -1,14 +1,20 @@
 import { memo, useEffect, useState, useRef, useCallback } from 'react'
-import type { ModpackManifestReference } from '@shared/types'
+import type { InstalledPackSummary, ModpackManifestReference } from '@shared/types'
 import { useNavigate } from 'react-router-dom'
 import { useLaunchStore } from '../store/launch.store'
 import { useAuthStore } from '../store/auth.store'
 
-const RecentPackCard = memo(function RecentPackCard({ pack, onPlay }: { pack: ModpackManifestReference; onPlay: (name: string) => void }) {
+type RecentPack = ModpackManifestReference | InstalledPackSummary
+
+const RecentPackCard = memo(function RecentPackCard({ pack, onPlay }: { pack: RecentPack; onPlay: (name: string) => void }) {
   const [logoUrl, setLogoUrl] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
+    if (!pack.location) {
+      setLogoUrl(null)
+      return () => { cancelled = true }
+    }
     window.electronAPI.packsGetLogo(pack.location, pack.name, pack.logo).then((url) => {
       if (!cancelled && url) setLogoUrl(url)
     }).catch(() => {})
@@ -56,7 +62,7 @@ export default function Home() {
   const username = selectedProfile?.lastKnownUsername ?? fallbackUsername
   const isLoggedIn = profiles.length > 0
   const [showAccountPicker, setShowAccountPicker] = useState(false)
-  const [recentPacks, setRecentPacks] = useState<ModpackManifestReference[]>([])
+  const [recentPacks, setRecentPacks] = useState<RecentPack[]>([])
   const [loading, setLoading] = useState(true)
   const pickerRef = useRef<HTMLDivElement>(null)
 
@@ -95,7 +101,7 @@ export default function Home() {
               .slice(0, 3)
               .map((name) => remote.find((pack) => pack.name === name)
                 ?? local.find((pack) => pack.name === name))
-              .filter((pack): pack is ModpackManifestReference => pack !== undefined)
+              .filter((pack): pack is RecentPack => pack !== undefined)
             setRecentPacks(matched)
           } catch {
             // Local manifests are unavailable or invalid.

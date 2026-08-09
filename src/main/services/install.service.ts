@@ -36,6 +36,7 @@ import {
 import type {
   ModpackManifest,
   ModpackManifestReference,
+  PersistedModpackManifest,
   Feature,
   FeatureCondition,
   FileTask,
@@ -55,6 +56,7 @@ import {
   assertSafeRelativePath,
   validateModpackManifest,
   validateModpackReference,
+  validatePersistedModpackManifest,
   ValidationError,
 } from '../../shared/validation'
 
@@ -173,7 +175,7 @@ const SELECTED_FEATURES_FILE = 'selected-features.json'
  */
 async function readSelectedFeatures(
   instanceDir: string,
-  manifest: ModpackManifest,
+  manifest: PersistedModpackManifest,
 ): Promise<string[]> {
   const filePath = path.join(instanceDir, SELECTED_FEATURES_FILE)
   try {
@@ -813,13 +815,30 @@ async function commitFeatureTransaction(
   })
 }
 
+export function collectStaleManagedTasks(
+  oldManifest: Pick<PersistedModpackManifest, 'tasks'> | null,
+  activeTasks: FileTask[],
+): FileTask[] {
+  const currentPaths = new Set(activeTasks.map((task) => managedPathKey(task.to)))
+  const oldTasksByPath = new Map<string, FileTask[]>()
+  for (const task of oldManifest?.tasks ?? []) {
+    const key = managedPathKey(task.to)
+    const group = oldTasksByPath.get(key) ?? []
+    group.push(task)
+    oldTasksByPath.set(key, group)
+  }
+  return [...oldTasksByPath.entries()].flatMap(([key, tasks]) => (
+    currentPaths.has(key) || tasks.some((task) => task.userFile) ? [] : [tasks.at(-1)!]
+  ))
+}
+
 async function commitManagedTransaction(
   instanceDir: string,
   stagingDir: string,
   staged: StagedTask[],
-  manifest: ModpackManifest,
+  manifest: PersistedModpackManifest,
   selectedFeatures: string[],
-  oldManifest: ModpackManifest | null,
+  oldManifest: PersistedModpackManifest | null,
   activeTasks: FileTask[] = resolveTaskPathCollisions(manifest.tasks ?? []),
 ): Promise<void> {
   const rollbackDir = path.join(stagingDir, 'rollback')
@@ -832,17 +851,7 @@ async function commitManagedTransaction(
     throw new ValidationError('Das persistierte Modpack-Manifest überschreitet die erlaubte Größe.')
   }
   const featuresBytes = Buffer.from(`${JSON.stringify(selectedFeatures, null, 2)}\n`)
-  const currentPaths = new Set(activeTasks.map((task) => managedPathKey(task.to)))
-  const oldTasksByPath = new Map<string, FileTask[]>()
-  for (const task of oldManifest?.tasks ?? []) {
-    const key = managedPathKey(task.to)
-    const group = oldTasksByPath.get(key) ?? []
-    group.push(task)
-    oldTasksByPath.set(key, group)
-  }
-  const staleTasks = [...oldTasksByPath.entries()].flatMap(([key, tasks]) => (
-    currentPaths.has(key) || tasks.some((task) => task.userFile) ? [] : [tasks.at(-1)!]
-  ))
+  const staleTasks = collectStaleManagedTasks(oldManifest, activeTasks)
   const targets: InstallTransactionTarget[] = []
   for (const item of staged) {
     targets.push({
@@ -956,7 +965,7 @@ class InstallService {
         name: pack.name,
         title: pack.title,
         version: pack.version,
-        location: pack.location,
+        ...(pack.location ? { location: pack.location } : {}),
         gameVersion: pack.gameVersion,
         ...(pack.logo ? { logo: pack.logo } : {}),
         hasFeatures: Array.isArray(pack.features) && pack.features.length > 0,
@@ -1295,13 +1304,17 @@ class InstallService {
     // ── f. Stage, verify, and atomically commit managed pack files ────────────
     const tasks = resolveActiveTasks(manifest.tasks ?? [], selectedFeatures)
     const manifestPath = path.join(instanceDir, 'manifest.json')
-    let oldManifest: ModpackManifest | null = null
+    let oldManifest: PersistedModpackManifest | null = null
     try {
       const contents = await readSafeRegularFile(manifestPath, {
         maxBytes: 50 * 1024 * 1024,
         label: 'Altes Manifest',
       })
-      oldManifest = validateModpackManifest(JSON.parse(contents.toString('utf8')) as unknown)
+      const parsed = validatePersistedModpackManifest(
+        JSON.parse(contents.toString('utf8')) as unknown,
+      )
+      if (parsed.name === manifest.name) oldManifest = parsed
+      else logger.warn(`[InstallService] Existing manifest name does not match instance ${manifest.name}; stale cleanup skipped`)
     } catch {
       // Missing/invalid manifests are never used as a cleanup authority.
     }
@@ -1659,7 +1672,7 @@ class InstallService {
   /**
    * Scan the instances directory and return all installed pack manifests.
    */
-  async getInstalledPacks(): Promise<ModpackManifest[]> {
+  async getInstalledPacks(): Promise<PersistedModpackManifest[]> {
     const instancesDir = configService.getInstancesDir()
     let entries: string[]
     try {
@@ -1668,7 +1681,7 @@ class InstallService {
       return []
     }
 
-    const manifests: ModpackManifest[] = []
+    const manifests: PersistedModpackManifest[] = []
     for (const entry of entries) {
       try {
         const packName = assertPackName(entry)
@@ -1682,11 +1695,15 @@ class InstallService {
             maxBytes: 50 * 1024 * 1024,
             label: 'Modpack-Manifest',
           })
-          const parsed = validateModpackManifest(JSON.parse(contents.toString('utf8')) as unknown)
+          const parsed = validatePersistedModpackManifest(
+            JSON.parse(contents.toString('utf8')) as unknown,
+          )
           if (parsed.name === packName) manifests.push(parsed)
+          else logger.warn(`[InstallService] Ignored installed manifest whose name does not match instance ${packName}`)
         })
-      } catch {
-        // Busy, incomplete, malformed, or unsafe instance directories are omitted.
+      } catch (error) {
+        // One bad instance must not make every installed pack disappear.
+        logger.warn(`[InstallService] Ignored unreadable installed instance: ${formatInstallError(error)}`)
       }
     }
 
@@ -1697,7 +1714,7 @@ class InstallService {
    * Read and return the manifest for a specific installed pack by name.
    * Returns `null` when not found or not readable.
    */
-  async getManifestByName(name: string, owner?: string): Promise<ModpackManifest | null> {
+  async getManifestByName(name: string, owner?: string): Promise<PersistedModpackManifest | null> {
     try {
       const packName = assertPackName(name)
       return await this.withPackRead(packName, async () => {
@@ -1710,7 +1727,9 @@ class InstallService {
           maxBytes: 50 * 1024 * 1024,
           label: 'Modpack-Manifest',
         })
-        const manifest = validateModpackManifest(JSON.parse(contents.toString('utf8')) as unknown)
+        const manifest = validatePersistedModpackManifest(
+          JSON.parse(contents.toString('utf8')) as unknown,
+        )
         return manifest.name === packName ? manifest : null
       }, owner)
     } catch {

@@ -1,8 +1,10 @@
 import { memo, useEffect, useState } from 'react'
-import type { ModpackManifest, ModpackManifestReference } from '@shared/types'
+import type { InstalledPackSummary, ModpackManifest, ModpackManifestReference } from '@shared/types'
+
+type CardManifest = ModpackManifest | ModpackManifestReference | InstalledPackSummary
 
 interface ModpackCardProps {
-  manifest: ModpackManifest | ModpackManifestReference
+  manifest: CardManifest
   isInstalled: boolean
   isRunning: boolean
   hasUpdate?: boolean
@@ -13,11 +15,11 @@ interface ModpackCardProps {
   onContextMenu?: (e: React.MouseEvent) => void
 }
 
-function isFullManifest(m: ModpackManifest | ModpackManifestReference): m is ModpackManifest {
+function isFullManifest(m: CardManifest): m is ModpackManifest {
   return 'versionManifest' in m
 }
 
-function detectModLoader(manifest: ModpackManifest | ModpackManifestReference): string | null {
+function detectModLoader(manifest: CardManifest): string | null {
   if (!isFullManifest(manifest)) return null
   const libs = manifest.versionManifest?.libraries ?? []
   for (const lib of libs) {
@@ -43,6 +45,10 @@ export default memo(function ModpackCard({
 
   useEffect(() => {
     let cancelled = false
+    if (!manifest.location) {
+      setLogoUrl(null)
+      return () => { cancelled = true }
+    }
     window.electronAPI
       .packsGetLogo(manifest.location, manifest.name, manifest.logo)
       .then((url) => {

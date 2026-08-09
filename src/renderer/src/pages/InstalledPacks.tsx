@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
-import type { ModpackManifestReference, InstallProgressEvent, InstallResult, Feature, ChangeFeaturesResult, PackFeaturesResult } from '@shared/types'
+import type { InstallProgressEvent, InstallResult, Feature, ChangeFeaturesResult, PackFeaturesResult } from '@shared/types'
 import ModpackCard from '../components/ModpackCard'
 import MinecraftVersionSelect from '../components/MinecraftVersionSelect'
 import ContextMenu from '../components/ContextMenu'
@@ -14,6 +14,8 @@ import {
   filterPacksByMinecraftVersion,
   getMinecraftVersionOptions,
   isMinecraftVersionSelectionValid,
+  mergeInstalledPacks,
+  type InstalledPackView,
 } from '../utils/modpackFilters'
 
 interface ContextMenuState {
@@ -24,7 +26,7 @@ interface ContextMenuState {
 
 export default function InstalledPacks() {
   const navigate = useNavigate()
-  const [packs, setPacks] = useState<ModpackManifestReference[]>([])
+  const [packs, setPacks] = useState<InstalledPackView[]>([])
   const [updateMap, setUpdateMap] = useState<Record<string, boolean>>({})
   const [featuresMap, setFeaturesMap] = useState<Record<string, boolean>>({})
   const [loading, setLoading] = useState(true)
@@ -65,11 +67,11 @@ export default function InstalledPacks() {
   )
 
   // Update (install) progress state
-  const [updatingPack, setUpdatingPack] = useState<ModpackManifestReference | null>(null)
+  const [updatingPack, setUpdatingPack] = useState<InstalledPackView | null>(null)
   const [updateProgress, setUpdateProgress] = useState<InstallProgressEvent | null>(null)
   const [updateResult, setUpdateResult] = useState<InstallResult | null>(null)
-  const [resultPack, setResultPack] = useState<ModpackManifestReference | null>(null)
-  const [pendingFeaturesPack, setPendingFeaturesPack] = useState<ModpackManifestReference | null>(null)
+  const [resultPack, setResultPack] = useState<InstalledPackView | null>(null)
+  const [pendingFeaturesPack, setPendingFeaturesPack] = useState<InstalledPackView | null>(null)
   const [pendingFeatures, setPendingFeatures] = useState<Feature[]>([])
   const updatingPackRef = useRef(updatingPack)
   const updatingTitleRef = useRef<string>('')
@@ -86,27 +88,15 @@ export default function InstalledPacks() {
         window.electronAPI.installGetInstalled(),
       ])
 
-      const remoteByName = new Map(remote.map((pack) => [pack.name, pack]))
-      const filtered: ModpackManifestReference[] = installed.map((local) => ({
-        name: local.name,
-        title: local.title,
-        version: local.version,
-        location: local.location,
-        gameVersion: local.gameVersion,
-        ...(local.logo ? { logo: local.logo } : {}),
-        ...(remoteByName.get(local.name) ?? {}),
-      }))
+      const merged = mergeInstalledPacks(installed, remote)
       const updates: Record<string, boolean> = {}
-      for (const local of installed) {
-        const remotePack = remoteByName.get(local.name)
-        updates[local.name] = !!remotePack && local.version !== remotePack.version
-      }
+      for (const pack of merged) updates[pack.name] = !!pack.updateReference
       const features: Record<string, boolean> = {}
       for (const p of installed) {
         features[p.name] = p.hasFeatures
       }
 
-      setPacks(filtered)
+      setPacks(merged)
       setUpdateMap(updates)
       setFeaturesMap(features)
     } catch (err) {
@@ -179,7 +169,7 @@ export default function InstalledPacks() {
     })
   }, [storeLaunch])
 
-  const presentInstallResult = useCallback((pack: ModpackManifestReference, result: InstallResult): void => {
+  const presentInstallResult = useCallback((pack: InstalledPackView, result: InstallResult): void => {
     if (result.error === 'FEATURE_SELECTION_REQUIRED') return
     setResultPack(pack)
     setUpdateProgress(null)
@@ -188,12 +178,14 @@ export default function InstalledPacks() {
     if (result.success) void loadPacks()
   }, [loadPacks])
 
-  const handleUpdate = useCallback(async (pack: ModpackManifestReference) => {
+  const handleUpdate = useCallback(async (pack: InstalledPackView) => {
+    const reference = pack.updateReference
+    if (!reference) return
     setUpdatingPack(pack)
     setUpdateProgress(null)
     setUpdateResult(null)
     try {
-      presentInstallResult(pack, await window.electronAPI.installModpack(pack, undefined))
+      presentInstallResult(pack, await window.electronAPI.installModpack(reference, undefined))
     } catch (err) {
       console.error('Update error', err)
       presentInstallResult(pack, {
@@ -255,12 +247,14 @@ export default function InstalledPacks() {
 
   const handleFeatureConfirm = useCallback(async (selectedFeatures: string[]) => {
     if (!pendingFeaturesPack) return
+    const reference = pendingFeaturesPack.updateReference
+    if (!reference) return
     const pack = pendingFeaturesPack
     setPendingFeaturesPack(null)
     setPendingFeatures([])
     setUpdatingPack(pack)
     try {
-      presentInstallResult(pack, await window.electronAPI.installModpack(pack, selectedFeatures))
+      presentInstallResult(pack, await window.electronAPI.installModpack(reference, selectedFeatures))
     } catch (err) {
       console.error('Update with features error', err)
       presentInstallResult(pack, {
@@ -309,7 +303,7 @@ export default function InstalledPacks() {
 
   const handleContextMenuClose = useCallback(() => setContextMenu(null), [])
 
-  const handleRepairPack = useCallback(async (pack: ModpackManifestReference) => {
+  const handleRepairPack = useCallback(async (pack: InstalledPackView) => {
     setUpdatingPack(pack)
     setResultPack(pack)
     setUpdateProgress(null)

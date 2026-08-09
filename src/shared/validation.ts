@@ -8,6 +8,7 @@ import {
   type LauncherConfig,
   type ModpackManifest,
   type ModpackManifestReference,
+  type PersistedModpackManifest,
   type PackConfig,
   type RendererConfigPatch,
   type UpdateChannel,
@@ -466,6 +467,25 @@ export function validateModpackManifest(value: unknown, referenceLocation?: stri
     ...(launch !== undefined ? { launch } : {}),
     ...(runtime !== undefined ? { runtime } : {}),
   }
+}
+
+/**
+ * Validate a manifest read from an existing instance.
+ *
+ * Launcher 2.2 wrote the raw backend response to `manifest.json`; that shape
+ * has no top-level package-list `location`. Only this persistence boundary
+ * accepts the missing field. Downloaded manifests and renderer references stay
+ * strict and must obtain their location from the trusted package list.
+ */
+export function validatePersistedModpackManifest(value: unknown): PersistedModpackManifest {
+  if (!isRecord(value)) throw new ValidationError('Das Modpack-Manifest ist ungültig.')
+  if (value.location != null) return validateModpackManifest(value)
+
+  // Reuse the complete validator with an internal valid path, then remove it
+  // before returning so no fabricated source can reach a download operation.
+  const validated = validateModpackManifest(value, '_legacy/manifest.json')
+  const { location: _internalLocation, ...persisted } = validated
+  return persisted
 }
 
 export function requireHttpsUrl(value: unknown, label = 'URL'): string {

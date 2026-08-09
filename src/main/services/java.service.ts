@@ -25,7 +25,7 @@ import { app } from 'electron'
 
 import { Constants, fmt } from '../constants'
 import { logger } from '../logger'
-import type { ModpackManifest, InstallProgressEvent } from '../../shared/types'
+import type { PersistedModpackManifest, InstallProgressEvent } from '../../shared/types'
 import { assertSafeRelativePath, requireHttpsUrl, ValidationError } from '../../shared/validation'
 import { fetchWithRetry, detectHashAlgorithm, readJsonResponseLimited } from '../fetch-retry'
 import { downloadFile, isStrongHash, normalizeHash } from '../download-manager'
@@ -334,7 +334,7 @@ async function getCachedRuntimeBin(runtimeName: string): Promise<string | null> 
  *   4. JAVA_HOME regardless (with warning — may crash)
  *   5. Bare "java" / "java.exe" on PATH (last resort, with warning)
  */
-export async function resolveJavaPath(manifest: ModpackManifest): Promise<string> {
+export async function resolveJavaPath(manifest: PersistedModpackManifest): Promise<string> {
   const required = requiresJavaMajor(manifest.gameVersion)
   const effectiveRuntime = manifest.runtime ?? inferRuntime(manifest.gameVersion)
 
@@ -412,7 +412,7 @@ function validateRuntimeName(value: string): string {
  * Returns the updated counters after download.
  */
 export async function ensureRuntime(
-  manifest: ModpackManifest,
+  manifest: PersistedModpackManifest,
   signal: AbortSignal,
   base: EnsureRuntimeCounters,
   onProgress: (event: InstallProgressEvent) => void,

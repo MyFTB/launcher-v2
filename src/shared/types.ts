@@ -75,6 +75,14 @@ export interface ModpackManifest extends ModpackManifestReference {
   tasks?: FileTask[]
 }
 
+/**
+ * Manifest stored inside an installed instance. Launcher 2.2 persisted the raw
+ * backend manifest, which did not include the package-list `location` field.
+ */
+export type PersistedModpackManifest = Omit<ModpackManifest, 'location'> & {
+  location?: string
+}
+
 // ─── Authentication ─────────────────────────────────────────────────────────
 
 export type AuthProvider = 'microsoft'
@@ -256,7 +264,9 @@ export interface InstallProgressEvent {
   failed: number
   currentFile?: string
 }
-export interface InstalledPackSummary extends ModpackManifestReference {
+export type InstalledPackSummary = Omit<ModpackManifestReference, 'location'> & {
+  /** Missing on manifests written by launcher 2.2 and older. */
+  location?: string
   hasFeatures: boolean
 }
 

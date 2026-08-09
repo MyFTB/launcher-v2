@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
+import { collectStaleManagedTasks } from '../main/services/install.service'
 import {
   validateFileTask,
   validateModpackManifest,
   validateModpackReference,
+  validatePersistedModpackManifest,
 } from '../shared/validation'
 
 const SHA1 = 'a'.repeat(40)
@@ -146,8 +148,60 @@ describe('MyFTB backend manifest compatibility', () => {
     expect(manifest.location).toBe('catalog/example.json')
   })
 
-  it('still requires persisted manifests to contain their normalized location', () => {
+  it('keeps downloaded manifests strict when no trusted location is supplied', () => {
     expect(() => validateModpackManifest(baseManifest())).toThrow(/Manifest-Pfad/)
+  })
+
+  it('loads a release-era persisted manifest without a package-list location', () => {
+    const manifest = validatePersistedModpackManifest({
+      ...baseManifest(),
+      logo: null,
+      tasks: [backendTask()],
+    })
+
+    expect(manifest).not.toHaveProperty('location')
+    expect(manifest).not.toHaveProperty('logo')
+    expect(manifest.tasks).toEqual([{
+      hash: SHA1,
+      location: `aa/bb/${SHA1}`,
+      to: 'mods/backend-0.jar',
+      userFile: false,
+    }])
+  })
+
+  it('keeps a valid location already persisted by a newer launcher', () => {
+    const manifest = validatePersistedModpackManifest({
+      ...baseManifest(),
+      location: 'catalog/example.json',
+    })
+    expect(manifest.location).toBe('catalog/example.json')
+  })
+
+  it('does not hide an invalid explicit location behind legacy compatibility', () => {
+    expect(() => validatePersistedModpackManifest({
+      ...baseManifest(),
+      location: '../escape.json',
+    })).toThrow(/Manifest-Pfad/)
+  })
+
+  it('uses release-era tasks to remove renamed managed mods without removing user files', () => {
+    const oldManifest = validatePersistedModpackManifest({
+      ...baseManifest(),
+      tasks: [
+        { ...backendTask(1), to: 'mods/sodium-old.jar' },
+        { ...backendTask(2), to: 'mods/user-added.jar', userFile: true },
+      ],
+    })
+    const currentTasks = [{
+      hash: SHA1,
+      location: `aa/bb/${SHA1}`,
+      to: 'mods/sodium-new.jar',
+      userFile: false,
+    }]
+
+    expect(collectStaleManagedTasks(oldManifest, currentTasks).map((task) => task.to)).toEqual([
+      'mods/sodium-old.jar',
+    ])
   })
 
   it('retains manifest, task path, URL, hash, and version-manifest restrictions', () => {

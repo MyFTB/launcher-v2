@@ -4,6 +4,7 @@ import {
   filterPacksByMinecraftVersion,
   getMinecraftVersionOptions,
   isMinecraftVersionSelectionValid,
+  mergeInstalledPacks,
 } from '../renderer/src/utils/modpackFilters'
 
 interface TestPack {
@@ -14,6 +15,48 @@ interface TestPack {
 function pack(name: string, gameVersion: string): TestPack {
   return { name, gameVersion }
 }
+
+describe('mergeInstalledPacks', () => {
+  const installed = {
+    name: 'stoneblock4',
+    title: 'FTB StoneBlock 4',
+    version: 'old-version',
+    gameVersion: '1.21.1',
+    hasFeatures: false,
+  }
+
+  it('keeps a release-era installed pack visible without a local or remote location', () => {
+    expect(mergeInstalledPacks([installed], [])).toEqual([installed])
+  })
+
+  it('attaches the trusted remote reference when an update is available', () => {
+    const remote = {
+      name: installed.name,
+      title: installed.title,
+      version: 'new-version',
+      gameVersion: installed.gameVersion,
+      location: 'stoneblock4.json',
+    }
+
+    expect(mergeInstalledPacks([installed], [remote])).toEqual([{
+      ...installed,
+      ...remote,
+      updateReference: remote,
+    }])
+  })
+
+  it('fills display metadata without exposing an update for the installed version', () => {
+    const remote = {
+      name: installed.name,
+      title: installed.title,
+      version: installed.version,
+      gameVersion: installed.gameVersion,
+      location: 'stoneblock4.json',
+    }
+
+    expect(mergeInstalledPacks([installed], [remote])).toEqual([{ ...installed, ...remote }])
+  })
+})
 
 describe('excludeInstalledPacks', () => {
   it('excludes packs by exact installed name', () => {
