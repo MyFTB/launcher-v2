@@ -1,7 +1,6 @@
 version: 2
 
 updates:
-  # ── npm ────────────────────────────────────────────────────────────────────
   - package-ecosystem: "npm"
     directory: "/"
     schedule:
@@ -9,27 +8,30 @@ updates:
       day: "monday"
       time: "06:00"
       timezone: "Europe/Berlin"
-    # Keep PR count manageable by grouping related packages
     groups:
       electron:
         patterns:
           - "electron"
           - "electron-*"
+        update-types: ["minor", "patch"]
       react:
         patterns:
           - "react"
           - "react-*"
           - "@types/react*"
+        update-types: ["minor", "patch"]
       vite:
         patterns:
           - "vite"
           - "vite-*"
           - "@vitejs/*"
           - "electron-vite"
+        update-types: ["minor", "patch"]
       tailwind:
         patterns:
           - "tailwindcss"
           - "@tailwindcss/*"
+        update-types: ["minor", "patch"]
       typescript-tooling:
         patterns:
           - "typescript"
@@ -37,17 +39,13 @@ updates:
           - "eslint"
           - "globals"
           - "@types/node"
+        update-types: ["minor", "patch"]
       xmcl:
         patterns:
           - "@xmcl/*"
+        update-types: ["minor", "patch"]
     open-pull-requests-limit: 10
-    # Major version bumps require manual review — too much migration risk.
-    # Minor and patch are safe to auto-PR. Handle majors by hand when ready.
-    ignore:
-      - dependency-name: "*"
-        update-types: ["version-update:semver-major"]
 
-  # ── GitHub Actions ────────────────────────────────────────────────────────
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
@@ -56,4 +54,5 @@ updates:
       github-actions:
         patterns:
           - "*"
+        update-types: ["minor", "patch"]
     open-pull-requests-limit: 5

@@ -2,9 +2,8 @@
  * Resilient fetch wrapper with automatic retry and hash verification helpers.
  *
  * Uses undici's fetch with the shared downloadDispatcher (connection pool,
- * extended connect timeout, redirect support).  Retry is handled here rather
- * than via undici's retry interceptor so that ANY non-abort error is retried
- * without maintaining an explicit error-code allowlist.
+ * extended connect timeout, redirect support). Retry decisions are explicit:
+ * transient network failures and selected HTTP statuses are retried.
  */
 
 import { createHash } from 'node:crypto'
@@ -24,20 +23,36 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
       reject(signal.reason)
       return
     }
-    const timer = setTimeout(resolve, ms)
-    signal?.addEventListener(
-      'abort',
-      () => {
-        clearTimeout(timer)
-        reject(signal.reason)
-      },
-      { once: true },
-    )
+    const onAbort = (): void => {
+      clearTimeout(timer)
+      reject(signal?.reason)
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    signal?.addEventListener('abort', onAbort, { once: true })
   })
 }
 
-function isRetryableStatus(status: number): boolean {
-  return status === 429 || (status >= 500 && status <= 599)
+export function isRetryableStatus(status: number): boolean {
+  return status === 408 || status === 425 || status === 429 || (status >= 500 && status <= 599)
+}
+
+export function parseRetryAfter(value: string | null, now = Date.now()): number | undefined {
+  if (!value) return undefined
+  const seconds = Number(value)
+  if (Number.isFinite(seconds)) return Math.min(Math.max(0, seconds * 1_000), 60_000)
+  const date = Date.parse(value)
+  return Number.isFinite(date) ? Math.min(Math.max(0, date - now), 60_000) : undefined
+}
+
+export function isRetryableNetworkError(error: unknown): boolean {
+  const record = error as (NodeJS.ErrnoException & { cause?: NodeJS.ErrnoException }) | undefined
+  const code = record?.code ?? record?.cause?.code ?? ''
+  if (/TLS|CERT|SSL/i.test(code)) return false
+  if (['ENOTFOUND', 'EAI_AGAIN', 'ECONNRESET', 'ECONNREFUSED', 'EPIPE', 'ENETDOWN', 'ENETUNREACH', 'EHOSTUNREACH', 'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT'].includes(code)) return true
+  return error instanceof Error && (error.name === 'TimeoutError' || (error instanceof TypeError && !code))
 }
 
 export interface FetchWithRetryOptions {
@@ -52,8 +67,8 @@ export interface FetchWithRetryOptions {
  * Undici-backed fetch with automatic retry on transient errors.
  *
  * Retries on:
- *   - Any network-level error except AbortError (no error-code allowlist)
- *   - HTTP 429 (Too Many Requests) and 5xx (Server Error)
+ *   - classified transient DNS, connection, and timeout failures
+ *   - HTTP 408, 425, 429, and 5xx responses
  *
  * Exponential back-off: 1 s, 2 s, 4 s ... capped at 10 s.
  *
@@ -65,6 +80,10 @@ export async function fetchWithRetry(
   options: FetchWithRetryOptions = {},
 ): Promise<UndiciResponse> {
   const { signal, timeoutMs = Constants.socketTimeoutMs, maxRetries = 3 } = options
+  const parsed = new URL(url)
+  if (parsed.protocol !== 'https:' || parsed.username || parsed.password) {
+    throw new Error('Only credential-free HTTPS downloads are allowed')
+  }
 
   for (let attempt = 0; ; attempt++) {
     signal?.throwIfAborted()
@@ -80,26 +99,60 @@ export async function fetchWithRetry(
       })
 
       if (isRetryableStatus(res.status) && attempt < maxRetries) {
+        const delay = parseRetryAfter(res.headers.get('retry-after'))
+          ?? Math.min(1_000 * 2 ** attempt, 10_000)
+        await res.body?.cancel().catch(() => {})
         logger.warn(
-          `[fetchWithRetry] ${url} returned ${res.status}, ` +
-            `retrying (${attempt + 1}/${maxRetries})...`,
+          `[fetchWithRetry] ${parsed.hostname} returned ${res.status}; retry ${attempt + 1}/${maxRetries} in ${delay}ms`,
         )
-        await sleep(Math.min(1_000 * 2 ** attempt, 10_000), signal)
+        await sleep(delay, signal)
         continue
       }
 
       return res
     } catch (err: unknown) {
-      if ((err as Error).name === 'AbortError') throw err
-      if (attempt >= maxRetries) throw err
-
+      if (signal?.aborted || (err instanceof Error && err.name === 'AbortError')) throw err
+      if (attempt >= maxRetries || !isRetryableNetworkError(err)) throw err
+      const delay = Math.min(1_000 * 2 ** attempt, 10_000)
       logger.warn(
-        `[fetchWithRetry] ${url} failed (${(err as Error).message}), ` +
-          `retrying (${attempt + 1}/${maxRetries})...`,
+        `[fetchWithRetry] ${parsed.hostname} transient request failure; retry ${attempt + 1}/${maxRetries} in ${delay}ms`,
       )
-      await sleep(Math.min(1_000 * 2 ** attempt, 10_000), signal)
+      await sleep(delay, signal)
     }
   }
+}
+
+/** Read and parse a bounded JSON body, cancelling the connection on overflow. */
+export async function readJsonResponseLimited(
+  response: UndiciResponse,
+  maximumBytes: number,
+): Promise<unknown> {
+  const declared = Number(response.headers.get('content-length') ?? 0)
+  if (declared > maximumBytes) {
+    await response.body?.cancel().catch(() => {})
+    throw new Error('Remote JSON response exceeds size limit')
+  }
+  if (!response.body) throw new Error('Remote JSON response has no body')
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let received = 0
+  let completed = false
+  try {
+    for (;;) {
+      const chunk = await reader.read()
+      if (chunk.done) {
+        completed = true
+        break
+      }
+      received += chunk.value.byteLength
+      if (received > maximumBytes) throw new Error('Remote JSON response exceeds size limit')
+      chunks.push(chunk.value)
+    }
+  } finally {
+    if (!completed) await reader.cancel().catch(() => {})
+    reader.releaseLock()
+  }
+  return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown
 }
 
 // ─── Hash verification ────────────────────────────────────────────────────────

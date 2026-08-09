@@ -1,15 +1,30 @@
-import type { InstallProgressEvent } from '@shared/types'
+import { useState } from 'react'
+import type { DownloadFailure, InstallProgressEvent } from '@shared/types'
 
 interface ProgressModalProps {
   progress: InstallProgressEvent | null
   packTitle: string
-  result: { success: boolean; error?: string } | null
+  result: { success: boolean; error?: string; failures?: DownloadFailure[] } | null
   successText?: string
   onCancel: () => void
   onDismiss: () => void
+  onRetry?: () => void
+  onRepair?: () => void
+  onOpenLogs?: () => void
 }
 
-export default function ProgressModal({ progress, packTitle, result, successText = 'Erfolgreich installiert!', onCancel, onDismiss }: ProgressModalProps) {
+export default function ProgressModal({
+  progress,
+  packTitle,
+  result,
+  successText = 'Erfolgreich installiert!',
+  onCancel,
+  onDismiss,
+  onRetry,
+  onRepair,
+  onOpenLogs,
+}: ProgressModalProps) {
+  const [showDetails, setShowDetails] = useState(false)
   const percent =
     progress && progress.total > 0
       ? Math.round((progress.finished / progress.total) * 100)
@@ -50,9 +65,28 @@ export default function ProgressModal({ progress, packTitle, result, successText
                 </div>
               </>
             )}
-            <button className="btn-primary mt-2 px-8" onClick={onDismiss}>
-              OK
-            </button>
+            {!result.success && showDetails && (
+              <div className="max-h-40 w-full overflow-auto rounded-md bg-bg-base p-3 text-left font-mono text-xs text-text-muted">
+                {result.failures?.length ? result.failures.map((failure, index) => (
+                  <p key={`${failure.task}-${index}`} className="mb-1 break-words">
+                    {failure.task}: {failure.message} ({failure.kind}, Versuch {failure.attempts})
+                  </p>
+                )) : <p>{result.error ?? 'Keine weiteren Details verfügbar.'}</p>}
+              </div>
+            )}
+            <div className="mt-2 flex flex-wrap justify-center gap-2">
+              {!result.success && onRetry && <button className="btn-primary" onClick={onRetry}>Erneut versuchen</button>}
+              {!result.success && onRepair && <button className="btn-secondary" onClick={onRepair}>Modpack reparieren</button>}
+              {!result.success && (
+                <button className="btn-ghost" onClick={() => setShowDetails((value) => !value)}>
+                  {showDetails ? 'Details ausblenden' : 'Details'}
+                </button>
+              )}
+              {!result.success && onOpenLogs && <button className="btn-ghost" onClick={onOpenLogs}>Logs öffnen</button>}
+              <button className={result.success ? 'btn-primary px-8' : 'btn-ghost'} onClick={onDismiss}>
+                {result.success ? 'OK' : 'Schließen'}
+              </button>
+            </div>
           </div>
         </div>
       </div>

@@ -1,118 +1,243 @@
-/**
- * Launch store — renderer side.
- *
- * Tracks the lifecycle of a running Minecraft process, the log buffer, and
- * exposes actions that map 1-to-1 onto IPC calls.
- *
- * Push events from the main process ('launch:state', 'launch:log') are wired
- * in initListeners().
- *
- * Usage:
- *   // App root — call once:
- *   useLaunchStore.getState().initListeners()
- *
- *   // In components:
- *   const { launchState, isRunning, launch, kill } = useLaunchStore()
- */
-
 import { create } from 'zustand'
-import type { LaunchState, LaunchStateEvent, LaunchLogEvent } from '@shared/types'
+import type {
+  LaunchConsoleSelectEvent,
+  LaunchLogEvent,
+  LaunchSession,
+  LaunchSessionRemovedEvent,
+  LaunchStartResult,
+  LaunchStateEvent,
+} from '@shared/types'
 import { ipc, onEvent } from '@renderer/ipc/client'
 
-// ─── State & actions ─────────────────────────────────────────────────────────
+const MAX_LOG_LINES = 10_000
+
+export interface LaunchSessionView extends LaunchSession {
+  logLines: string[]
+}
 
 interface LaunchStoreState {
-  // ── Data ────────────────────────────────────────────────────────────────────
-  /** Most-recent state emitted by the main process, null before first launch. */
-  launchState: LaunchState | null
-  /** Convenience boolean derived from launchState. */
-  isRunning: boolean
-  /** Rolling log lines from the Minecraft process (stdout + stderr). */
-  logLines: string[]
-  /** Pack name that is currently launching / has been launched. */
-  currentPack: string | null
-
-  // ── Actions ─────────────────────────────────────────────────────────────────
-  launch(packName: string): Promise<void>
-  kill(): Promise<void>
-  /** Pull the full in-memory log buffer from main and replace logLines. */
-  fetchLog(): Promise<void>
+  sessions: Record<string, LaunchSessionView>
+  selectedSessionId: string | null
+  launchError: string | null
+  launch(packName: string): Promise<LaunchStartResult>
+  kill(sessionId: string): Promise<void>
+  removeSession(sessionId: string): Promise<void>
+  fetchLog(sessionId: string): Promise<void>
+  selectSession(sessionId: string): void
   openFolder(packName: string): Promise<void>
+  deletePack(packName: string): Promise<{ success: boolean; error?: string }>
   createShortcut(packName: string): Promise<void>
-  /** Upload the current log to a paste service; resolves with the URL. */
-  uploadLog(): Promise<string>
-  /** Upload the latest crash report for packName; resolves with the URL. */
-  uploadCrash(packName: string): Promise<string>
-  /** Subscribe to push events from the main process.  Call once at startup. */
   initListeners(): void
 }
 
-// ─── Store ───────────────────────────────────────────────────────────────────
+let listenersInitialized = false
+let logFlushTimer: ReturnType<typeof setTimeout> | null = null
+let pendingSelectionId: string | null = null
+const pendingLogs = new Map<string, string[]>()
+const removedSessionIds = new Set<string>()
+const MAX_REMOVED_SESSION_IDS = 1_000
 
-export const useLaunchStore = create<LaunchStoreState>()((set) => ({
-  launchState: null,
-  isRunning: false,
-  logLines: [],
-  currentPack: null,
+function rememberRemovedSession(sessionId: string): void {
+  removedSessionIds.add(sessionId)
+  if (removedSessionIds.size <= MAX_REMOVED_SESSION_IDS) return
+  const oldest = removedSessionIds.values().next().value
+  if (oldest) removedSessionIds.delete(oldest)
+}
 
-  async launch(packName: string) {
-    set({ currentPack: packName, logLines: [] })
+function flushLogs(): void {
+  if (logFlushTimer) clearTimeout(logFlushTimer)
+  logFlushTimer = null
+  const batches = new Map(pendingLogs)
+  pendingLogs.clear()
+  useLaunchStore.setState((state) => {
+    const sessions = { ...state.sessions }
+    for (const [sessionId, lines] of batches) {
+      const session = sessions[sessionId]
+      if (!session) continue
+      const combined = session.logLines.length + lines.length > MAX_LOG_LINES
+        ? [...session.logLines, ...lines].slice(-MAX_LOG_LINES)
+        : [...session.logLines, ...lines]
+      sessions[sessionId] = { ...session, logLines: combined }
+    }
+    return { sessions }
+  })
+}
+
+function mergeLogHistory(history: string[], current: string[]): string[] {
+  if (current.length === 0) return history.slice(-MAX_LOG_LINES)
+  if (history.length === 0) return current.slice(-MAX_LOG_LINES)
+  if (current.length <= history.length && current.every((line, index) => line === history[index])) {
+    return history.slice(-MAX_LOG_LINES)
+  }
+  const maximumOverlap = Math.min(history.length, current.length)
+  for (let overlap = maximumOverlap; overlap > 0; overlap--) {
+    let matches = true
+    for (let index = 0; index < overlap; index++) {
+      if (history[history.length - overlap + index] !== current[index]) {
+        matches = false
+        break
+      }
+    }
+    if (matches) return [...history, ...current.slice(overlap)].slice(-MAX_LOG_LINES)
+  }
+  return [...history, ...current].slice(-MAX_LOG_LINES)
+}
+
+function queueLog(event: LaunchLogEvent): void {
+  const lines = pendingLogs.get(event.sessionId) ?? []
+  lines.push(event.line)
+  pendingLogs.set(event.sessionId, lines)
+  if (!logFlushTimer) logFlushTimer = setTimeout(flushLogs, 50)
+}
+
+export const useLaunchStore = create<LaunchStoreState>()((set, get) => ({
+  sessions: {},
+  selectedSessionId: null,
+  launchError: null,
+
+  async launch(packName) {
+    set({ launchError: null })
     try {
-      await ipc.launch.start(packName)
-      // Further state updates arrive via 'launch:state' push events.
-    } catch (err) {
-      set({ currentPack: null })
-      throw err
+      const result = await ipc.launch.start(packName)
+      set((state) => ({
+        sessions: {
+          ...state.sessions,
+          [result.session.id]: {
+            ...result.session,
+            logLines: state.sessions[result.session.id]?.logLines ?? [],
+          },
+        },
+        selectedSessionId: result.session.id,
+      }))
+      return result
+    } catch (error) {
+      set({ launchError: error instanceof Error ? error.message : 'Der Start ist fehlgeschlagen.' })
+      throw error
     }
   },
 
-  async kill() {
-    await ipc.launch.kill()
+  async kill(sessionId) {
+    await ipc.launch.kill(sessionId)
   },
 
-  async fetchLog() {
-    const raw = await ipc.launch.getLog()
-    // The main process returns a single string; split on newlines for display.
-    set({ logLines: raw.split('\n') })
+  async removeSession(sessionId) {
+    await ipc.launch.removeSession(sessionId)
   },
 
-  async openFolder(packName: string) {
-    await ipc.launch.openFolder(packName)
+  async fetchLog(sessionId) {
+    flushLogs()
+    const text = await ipc.launch.getLog(sessionId)
+    const history = text ? text.split('\n').slice(-MAX_LOG_LINES) : []
+    set((state) => {
+      const session = state.sessions[sessionId]
+      if (!session) return state
+      return {
+        sessions: {
+          ...state.sessions,
+          [sessionId]: { ...session, logLines: mergeLogHistory(history, session.logLines) },
+        },
+      }
+    })
   },
 
-  async createShortcut(packName: string) {
-    await ipc.launch.createShortcut(packName)
+  selectSession(sessionId) {
+    if (get().sessions[sessionId]) set({ selectedSessionId: sessionId })
   },
 
-  async uploadLog(): Promise<string> {
-    return ipc.launch.uploadLog()
-  },
-
-  async uploadCrash(packName: string): Promise<string> {
-    return ipc.launch.uploadCrash(packName)
-  },
+  openFolder: (packName) => ipc.launch.openFolder(packName),
+  deletePack: (packName) => ipc.launch.deletePack(packName),
+  createShortcut: (packName) => ipc.launch.createShortcut(packName),
 
   initListeners() {
-    // Minecraft process lifecycle state changes.
-    onEvent('launch:state', (...args: unknown[]) => {
-      const event = args[0] as LaunchStateEvent
-      const running = event.state === 'launching' || event.state === 'running'
-      set({
-        launchState: event.state,
-        isRunning: running,
-        // Clear the running pack once the game closes/crashes so badges disappear.
-        ...(!running && { currentPack: null }),
+    if (listenersInitialized) return
+    listenersInitialized = true
+
+    void ipc.launch.getSessions().then((snapshot) => {
+      const requestedSelection = pendingSelectionId
+      set((state) => {
+        const sessions = { ...state.sessions }
+        for (const session of snapshot) {
+          if (removedSessionIds.has(session.id)) continue
+          const existing = sessions[session.id]
+          if (existing && existing.updatedAt >= session.updatedAt) continue
+          sessions[session.id] = {
+            ...session,
+            logLines: existing?.logLines ?? [],
+          }
+        }
+        const orderedSessions = Object.values(sessions).sort((a, b) => b.startedAt - a.startedAt)
+        const selectedSessionId = requestedSelection && sessions[requestedSelection]
+          ? requestedSelection
+          : state.selectedSessionId && sessions[state.selectedSessionId]
+            ? state.selectedSessionId
+            : orderedSessions.find((session) => session.state === 'running' || session.state === 'launching')?.id
+              ?? orderedSessions[0]?.id
+              ?? null
+        return { sessions, selectedSessionId }
       })
+      if (
+        requestedSelection
+        && snapshot.some((session) => session.id === requestedSelection)
+        && pendingSelectionId === requestedSelection
+      ) pendingSelectionId = null
+    }).catch((error: unknown) => {
+      set({ launchError: error instanceof Error ? error.message : 'Sitzungen konnten nicht geladen werden.' })
     })
 
-    // Individual log lines streamed from the Minecraft process.
-    // Cap at 5 000 lines to prevent unbounded memory growth.
+    onEvent('launch:state', (...args: unknown[]) => {
+      const event = args[0] as LaunchStateEvent
+      if (!event?.session?.id || removedSessionIds.has(event.session.id)) return
+      const requested = pendingSelectionId === event.session.id
+      if (requested) pendingSelectionId = null
+      set((state) => ({
+        sessions: {
+          ...state.sessions,
+          [event.session.id]: {
+            ...event.session,
+            logLines: state.sessions[event.session.id]?.logLines ?? [],
+          },
+        },
+        selectedSessionId: requested ? event.session.id : state.selectedSessionId ?? event.session.id,
+      }))
+    })
+
     onEvent('launch:log', (...args: unknown[]) => {
       const event = args[0] as LaunchLogEvent
-      set((s) => {
-        const next = [...s.logLines, event.line]
-        return { logLines: next.length > 5000 ? next.slice(next.length - 5000) : next }
+      if (event?.sessionId && !removedSessionIds.has(event.sessionId) && typeof event.line === 'string') queueLog(event)
+    })
+
+    onEvent('launch:console-select', (...args: unknown[]) => {
+      const event = args[0] as LaunchConsoleSelectEvent
+      if (!event?.sessionId || removedSessionIds.has(event.sessionId)) return
+      if (!get().sessions[event.sessionId]) {
+        pendingSelectionId = event.sessionId
+        return
+      }
+      pendingSelectionId = null
+      set({ selectedSessionId: event.sessionId })
+      void get().fetchLog(event.sessionId).catch(() => {})
+    })
+
+    onEvent('launch:session-removed', (...args: unknown[]) => {
+      const event = args[0] as LaunchSessionRemovedEvent
+      if (!event?.sessionId) return
+      rememberRemovedSession(event.sessionId)
+      pendingLogs.delete(event.sessionId)
+      if (pendingSelectionId === event.sessionId) pendingSelectionId = null
+      set((state) => {
+        if (!state.sessions[event.sessionId]) return state
+        const { [event.sessionId]: _removed, ...sessions } = state.sessions
+        const selectedSessionId = state.selectedSessionId === event.sessionId
+          ? Object.values(sessions).sort((a, b) => b.startedAt - a.startedAt)[0]?.id ?? null
+          : state.selectedSessionId
+        return { sessions, selectedSessionId }
       })
     })
   },
 }))
+
+export function usePackLaunchSession(packName: string): LaunchSessionView | undefined {
+  return useLaunchStore((state) => Object.values(state.sessions)
+    .filter((session) => session.packName === packName)
+    .sort((a, b) => b.startedAt - a.startedAt)[0])
+}

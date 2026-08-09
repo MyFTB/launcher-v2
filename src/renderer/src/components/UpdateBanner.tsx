@@ -77,6 +77,29 @@ export default function UpdateBanner() {
     }
   }, [])
 
+  const showError = (error: unknown): void => {
+    setState({
+      status: 'error',
+      message: error instanceof Error ? error.message : 'Das Update ist fehlgeschlagen.',
+    })
+  }
+
+  const startDownload = async (): Promise<void> => {
+    try {
+      await window.electronAPI.updateDownload()
+    } catch (error) {
+      showError(error)
+    }
+  }
+
+  const installUpdate = async (): Promise<void> => {
+    try {
+      await window.electronAPI.updateInstall()
+    } catch (error) {
+      showError(error)
+    }
+  }
+
   const visible = !dismissed && state.status !== 'idle'
 
   return (
@@ -96,7 +119,7 @@ export default function UpdateBanner() {
           <div className="flex items-center gap-2">
             <button
               className="btn-primary h-7 px-3 text-xs"
-              onClick={() => window.electronAPI.updateDownload()}
+              onClick={() => void startDownload()}
             >
               Herunterladen
             </button>
@@ -104,6 +127,7 @@ export default function UpdateBanner() {
               className="p-1 rounded text-text-muted hover:text-text-primary transition-colors"
               onClick={() => setDismissed(true)}
               title="Schließen"
+              aria-label="Update-Hinweis schließen"
             >
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-3.5 h-3.5">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
@@ -153,7 +177,7 @@ export default function UpdateBanner() {
           </div>
           <button
             className="btn-primary h-7 px-3 text-xs"
-            onClick={() => window.electronAPI.updateInstall()}
+            onClick={() => void installUpdate()}
           >
             Neu starten &amp; installieren
           </button>

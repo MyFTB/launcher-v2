@@ -48,6 +48,18 @@ export function sanitizeLogLine(message: string): string {
   return message.replace(/\r\n/g, '\\r\\n').replace(/\n/g, '\\n').replace(/\r/g, '\\r')
 }
 
+/** Remove credentials and private pack keys before a message reaches disk. */
+export function redactSensitiveLogData(message: string): string {
+  return message
+    .replace(/\bBearer\s+[A-Za-z0-9._~+\/-]+=*/gi, 'Bearer [REDACTED]')
+    .replace(
+      /("(?:access_token|refresh_token|minecraftAccessToken|oauthRefreshToken|packKey|clientToken)"\s*:\s*")[^"]*(")/gi,
+      '$1[REDACTED]$2',
+    )
+    .replace(/([?&](?:key|token|access_token|refresh_token)=)[^&\s]+/gi, '$1[REDACTED]')
+    .replace(/(--(?:accessToken|uuid|clientId|xuid)(?:=|\s+))\S+/gi, '$1[REDACTED]')
+}
+
 /**
  * Serialise a single log argument to a string.
  * Exported for unit testing.
@@ -186,7 +198,7 @@ class Logger {
 
   private log(level: LogLevel, args: unknown[]): void {
     const ts = new Date().toISOString()
-    const message = sanitizeLogLine(this.formatArgs(args))
+    const message = sanitizeLogLine(redactSensitiveLogData(this.formatArgs(args)))
     const line = `[${ts}] [${level}] ${message}`
 
     this.writeLine(line)

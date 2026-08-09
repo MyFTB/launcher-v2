@@ -37,6 +37,8 @@ export const Constants = {
   socketTimeoutMs: 90_000,
   discordAppId: '571102332771893268',
   logMaxLines: 10_000,
+  /** Closed/crashed launch sessions retained for console history. */
+  launchSessionHistoryMax: 20,
   /** How many recent packs to remember */
   recentPacksMax: 3,
   /** Image cache TTL in ms (3 days) */

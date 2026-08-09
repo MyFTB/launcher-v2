@@ -1,6 +1,7 @@
 import { memo, useEffect, useState, useCallback, useRef, useMemo, KeyboardEvent } from 'react'
-import type { LauncherConfig, SystemInfoResult, LauncherProfile } from '@shared/types'
+import type { RendererConfig, SystemInfoResult } from '@shared/types'
 import { ipc } from '../ipc/client'
+import { useAuthStore } from '../store/auth.store'
 import LoginModal from '../components/LoginModal'
 import MigrationModal from '../components/MigrationModal'
 import MicrosoftIcon from '../components/icons/MicrosoftIcon'
@@ -78,7 +79,7 @@ interface FormState {
   updateChannel: 'stable' | 'experimental'
 }
 
-function formFromConfig(c: LauncherConfig): FormState {
+function formFromConfig(c: RendererConfig): FormState {
   return {
     packKey: c.packKey ?? '',
     jvmArgs: c.jvmArgs ?? '',
@@ -106,16 +107,22 @@ export default function Settings() {
   const [systemInfo, setSystemInfo] = useState<SystemInfoResult | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [channelSaving, setChannelSaving] = useState(false)
   const [saveSuccess, setSaveSuccess] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [profiles, setProfiles] = useState<LauncherProfile[]>([])
-  const [selectedUuid, setSelectedUuid] = useState<string | undefined>(undefined)
+  const profiles = useAuthStore((state) => state.profiles)
+  const selectedUuid = useAuthStore((state) => state.selectedUuid)
+  const logout = useAuthStore((state) => state.logout)
+  const switchProfile = useAuthStore((state) => state.switchProfile)
+  const authError = useAuthStore((state) => state.loginError)
   const [showLogin, setShowLogin] = useState(false)
   const saveSuccessTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const formRef = useRef(form)
   useEffect(() => { formRef.current = form }, [form])
 
   const [showMigration, setShowMigration] = useState(false)
+  const [dataDirChanging, setDataDirChanging] = useState(false)
+  const [dataDirError, setDataDirError] = useState<string | null>(null)
 
   useEffect(() => {
     return () => {
@@ -136,8 +143,6 @@ export default function Settings() {
         setForm(f)
         setOriginal(f)
         setSystemInfo(sysInfo)
-        setProfiles(config.profileStore.profiles)
-        setSelectedUuid(config.profileStore.selectedProfileUuid)
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : 'Fehler beim Laden')
       } finally {
@@ -148,23 +153,17 @@ export default function Settings() {
     return () => { cancelled = true }
   }, [])
 
-  // Keep profile state in sync when login/logout/switch happens
-  useEffect(() => {
-    const unsub = window.electronAPI.on('auth:profiles-updated', (...args: unknown[]) => {
-      const event = args[0] as { profiles: LauncherProfile[]; selectedUuid?: string }
-      setProfiles(event.profiles)
-      setSelectedUuid(event.selectedUuid)
-    })
-    return unsub
-  }, [])
-
   const handleLogout = useCallback(async () => {
-    await window.electronAPI.authLogout().catch(console.error)
-  }, [])
+    try { await logout() } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Abmelden fehlgeschlagen.')
+    }
+  }, [logout])
 
   const handleSwitchProfile = useCallback(async (uuid: string) => {
-    await window.electronAPI.authSwitchProfile(uuid).catch(console.error)
-  }, [])
+    try { await switchProfile(uuid) } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Account-Wechsel fehlgeschlagen.')
+    }
+  }, [switchProfile])
 
   const isDirty = useMemo(
     () => original !== null && JSON.stringify(form) !== JSON.stringify(original),
@@ -184,12 +183,30 @@ export default function Settings() {
     }
   }, [])
 
+  const handleChangeDataDir = useCallback(async () => {
+    setDataDirChanging(true)
+    setDataDirError(null)
+    let restartPending = false
+    try {
+      const result = await ipc.config.changeDataDir()
+      restartPending = result.success
+      if (!result.success && !result.cancelled) {
+        setDataDirError(result.error ?? 'Der Datenordner konnte nicht geändert werden.')
+      }
+    } catch (caught) {
+      setDataDirError(caught instanceof Error ? caught.message : 'Der Datenordner konnte nicht geändert werden.')
+    } finally {
+      if (!restartPending) setDataDirChanging(false)
+    }
+  }, [])
+
   const handleSave = useCallback(async () => {
     const snapshot = formRef.current
     setSaving(true)
     setError(null)
     try {
-      await window.electronAPI.configSave(snapshot)
+      const { updateChannel: _channel, ...settingsPatch } = snapshot
+      await window.electronAPI.configSave(settingsPatch)
       setOriginal(snapshot)
       setSaveSuccess(true)
       if (saveSuccessTimeoutRef.current) clearTimeout(saveSuccessTimeoutRef.current)
@@ -204,6 +221,23 @@ export default function Settings() {
   function update<K extends keyof FormState>(key: K, value: FormState[K]): void {
     setForm((prev) => ({ ...prev, [key]: value }))
   }
+
+  const handleChannelChange = useCallback(async (channel: FormState['updateChannel']) => {
+    const previous = formRef.current.updateChannel
+    if (channel === previous || channelSaving) return
+    setChannelSaving(true)
+    setError(null)
+    setForm((current) => ({ ...current, updateChannel: channel }))
+    try {
+      await window.electronAPI.updateSetChannel(channel)
+      setOriginal((current) => current ? { ...current, updateChannel: channel } : current)
+    } catch (caught) {
+      setForm((current) => ({ ...current, updateChannel: previous }))
+      setError(caught instanceof Error ? caught.message : 'Der Update-Kanal konnte nicht geändert werden.')
+    } finally {
+      setChannelSaving(false)
+    }
+  }, [channelSaving])
 
   const maxMemoryMb = computeMaxMemoryMb(systemInfo?.totalMemoryMb)
   const memoryLandmarks = useMemo(() => buildLandmarks(maxMemoryMb), [maxMemoryMb])
@@ -239,9 +273,9 @@ export default function Settings() {
         <p className="text-text-secondary mt-1 text-sm">Konfiguriere den Launcher nach deinen Wünschen.</p>
       </div>
 
-      {error && (
-        <div className="mb-4 px-4 py-3 rounded-lg bg-red-900/30 border border-red-700/50 text-sm text-red-400">
-          {error}
+      {(error || authError) && (
+        <div className="mb-4 px-4 py-3 rounded-lg bg-red-900/30 border border-red-700/50 text-sm text-red-400" role="alert">
+          {error ?? authError}
         </div>
       )}
 
@@ -313,6 +347,32 @@ export default function Settings() {
           <p className="text-xs text-text-muted mt-1">
             Zugangscodes für private Modpacks. Enter oder Komma zum Hinzufügen, Backspace zum Entfernen.
           </p>
+        </div>
+
+        {/* Launcher data directory */}
+        <div>
+          <label className="block text-xs font-medium text-text-secondary mb-1.5">
+            Launcher-Datenverzeichnis
+          </label>
+          <p className="text-xs text-text-muted mb-2">
+            Enthält Konfiguration, Accounts, Logs, Java-Runtimes, Cache und standardmäßig auch Modpacks.
+            Der bisherige Ordner bleibt als Sicherung erhalten.
+          </p>
+          <div className="flex gap-2 items-center">
+            <span className="input flex-1 text-text-secondary truncate cursor-default select-all">
+              {systemInfo?.dataDir ?? '…'}
+            </span>
+            <button
+              className="btn-secondary shrink-0"
+              onClick={() => void handleChangeDataDir()}
+              disabled={dataDirChanging || showMigration}
+            >
+              {dataDirChanging ? 'Kopiert…' : 'Ändern…'}
+            </button>
+          </div>
+          {dataDirError && (
+            <p className="text-xs text-red-400 mt-1" role="alert">{dataDirError}</p>
+          )}
         </div>
 
         {/* Modpack Directory */}
@@ -540,10 +600,8 @@ export default function Settings() {
             {(['stable', 'experimental'] as const).map((ch) => (
               <button
                 key={ch}
-                onClick={() => {
-                  update('updateChannel', ch)
-                  window.electronAPI.updateSetChannel(ch)
-                }}
+                onClick={() => void handleChannelChange(ch)}
+                disabled={channelSaving}
                 className={`px-3 py-1 rounded-md text-xs font-medium transition-colors duration-150 ${
                   form.updateChannel === ch
                     ? 'bg-bg-elevated text-text-primary shadow-sm'
@@ -569,6 +627,17 @@ export default function Settings() {
 
       {showLogin && <LoginModal onClose={() => setShowLogin(false)} />}
       {showMigration && <MigrationModal onDismiss={handleMigrationDismiss} />}
+      {dataDirChanging && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 backdrop-blur-sm" role="status" aria-live="polite">
+          <div className="card w-full max-w-sm mx-4 p-6 text-center shadow-2xl">
+            <span className="inline-block w-8 h-8 border-[3px] border-accent border-t-transparent rounded-full animate-spin" />
+            <h2 className="text-base font-semibold text-text-primary mt-4">Launcher-Daten werden kopiert</h2>
+            <p className="text-sm text-text-secondary mt-2">
+              Dateien werden geprüft und anschließend sicher umgeschaltet. Bitte beende den Launcher nicht.
+            </p>
+          </div>
+        </div>
+      )}
     </div>
 
     {/* Discord-style floating save pill */}

@@ -1,77 +1,113 @@
 # Contributing to MyFTB Launcher
 
-Thanks for your interest in contributing! Here is everything you need to get started.
-
 ## Development setup
+
+Use Node.js `24.18.1` (or a newer Node 24 LTS patch) with its bundled npm `11.16.0` or newer. Do not upgrade npm separately.
 
 ```bash
 git clone https://github.com/MyFTB/launcher-v2.git
 cd launcher-v2
-npm install
+nvm use
+npm ci --strict-peer-deps
+npm run prepare:electron
 npm run dev
 ```
 
-## Before you open a PR
+Use `npm ci`, not `npm install`, for a clean checkout. Electron 43 downloads its binary through the explicit preparation command; development and preview scripts also prepare it automatically.
 
-Run these checks locally — they all run in CI too:
+## Before you open a pull request
+
+Run the complete check set from a clean install:
 
 ```bash
-npm run type-check   # TypeScript
-npm run lint         # ESLint (0 warnings allowed)
-npm run test         # Vitest (102 tests)
-npm run build        # Full production build
+npm ci --strict-peer-deps
+npm ls --all
+npm outdated
+npm run audit:production
+npm run audit:full
+npm run lint
+npm run type-check
+npm run test
+npm run build
+npm run package -- --dir --publish never
 ```
+
+`npm outdated` can report only the documented compatibility holds. These holds cover Vite 8, plugin-react 6, TypeScript 7, Node 26 types, and the XMCL Undici alias.
+
+Use the manual release dry-run workflow when a change affects packaging. It builds unsigned NSIS, DMG, AppImage, and deb files without publishing a release.
 
 ## Code conventions
 
 ### Architecture boundaries
 
-The codebase has three Electron processes with hard boundaries:
+The codebase has three Electron processes with strict boundaries:
 
-- **`src/main/`** — Node.js only. No React, no DOM.
-- **`src/renderer/`** — React only. No direct Node/Electron API access.
-- **`src/preload/`** — Bridge only. Every renderer→main call goes through `contextBridge`.
-- **`src/shared/`** — Pure types. No runtime code.
+- **`src/main/`** contains Node.js and Electron code. Do not import React or DOM APIs.
+- **`src/renderer/`** contains React code. Do not access Node.js or Electron directly.
+- **`src/preload/`** exposes the approved `contextBridge` API.
+- **`src/shared/`** contains shared types and pure runtime validation.
+
+Keep `contextIsolation: true`, `nodeIntegration: false`, and `sandbox: true` for renderer windows.
 
 ### IPC
 
-- All channel names live in `src/main/ipc/channels.ts` — never use raw strings.
-- New IPC methods must be added to the `ElectronAPI` interface in `src/shared/types.ts`.
-- Renderer calls go through `src/renderer/src/ipc/client.ts`, never `window.electronAPI` directly.
+- Define channel names in `src/main/ipc/channels.ts`.
+- Add new IPC methods to `ElectronAPI` in `src/shared/types.ts`.
+- Call IPC through `src/renderer/src/ipc/client.ts`.
+- Do not expose `ipcRenderer` to the renderer.
 
 ### Styling
 
-- Use semantic Tailwind tokens (`bg-bg-surface`, `text-accent`, etc.) — never raw hex values.
-- Font: `font-sans` (Outfit Variable). No external Google Fonts imports — the font is bundled.
+- Use semantic Tailwind tokens such as `bg-bg-surface` and `text-accent`.
+- Use the bundled Outfit Variable font through `font-sans`.
+- Do not add remote font imports.
 
 ### Testing
 
-- Tests live in `src/tests/` and are pure TypeScript (no Electron/DOM).
-- **Always add or extend a test** when fixing a bug or adding logic to a service.
-- Import explicitly from vitest: `import { describe, it, expect } from 'vitest'`.
+- Put tests in `src/tests/`.
+- Extract Electron-independent logic into pure production helpers.
+- Add or extend a test for each bug fix and logic change.
+- Import Vitest APIs explicitly.
+
+```ts
+import { describe, expect, it } from 'vitest'
+```
+
+### Dependencies
+
+Use stable releases for direct dependencies, development tools, and GitHub Actions. Do not add prerelease versions.
+
+Keep these compatibility boundaries until their parent tools support the next major versions:
+
+- `electron-vite@5` with Vite 7
+- `@vitejs/plugin-react@5` with Vite 7
+- TypeScript `6.0.3` with `typescript-eslint@8.66`
+- Node 24 types with Node 24 and Electron 43
+- Undici 8 for launcher HTTP and Undici 7 for XMCL
+
+Do not add blanket dependency overrides. The current XMCL overrides and version-checked postinstall repair fix published 6.3.1 metadata only. Remove them after a verified stable XMCL release makes them unnecessary.
+
+Regenerate `package-lock.json` with the npm version bundled with the Node release in `.nvmrc`. Run a clean `npm ci --strict-peer-deps` after each dependency change.
 
 ### Commits
 
-Follow [Conventional Commits](https://www.conventionalcommits.org/):
+Use [Conventional Commits](https://www.conventionalcommits.org/):
 
-```
+```text
 feat: add pack search filter
-fix: crash when manifest is missing gameVersion
-chore: upgrade electron 41→42
-docs: update contributing guide
+fix: reject an invalid manifest version
+chore: upgrade Electron 42 to 43
+docs: update the setup guide
 ```
 
 ## API endpoints
 
-The `packs.myftb.de` backend has no CORS headers. All HTTP requests to that
-domain **must** be made in the main process — never from the renderer.
+The `packs.myftb.de` backend has no CORS headers. Make all requests to this domain in the main process.
 
 ## Reporting security issues
 
-Please do **not** open a public issue for security vulnerabilities.
-See [SECURITY.md](.github/SECURITY.md) for the responsible disclosure process.
+Do not open a public issue for a security vulnerability. Follow [SECURITY.md](.github/SECURITY.md).
 
 ## License
 
-By contributing you agree that your contributions will be licensed under the
-project's [GPL-3.0 license](LICENSE).
+Contributions use the project [GPL-3.0 license](LICENSE).

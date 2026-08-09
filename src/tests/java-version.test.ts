@@ -1,3 +1,4 @@
+import path from 'node:path'
 import { describe, it, expect } from 'vitest'
 
 import {
@@ -6,6 +7,7 @@ import {
   inferRuntime,
   getRuntimePlatform,
   getRuntimeArchSuffix,
+  runtimeJavaBinaryPath,
   javaHomeMatchesRequired,
 } from '../main/services/java.service'
 
@@ -80,6 +82,17 @@ describe('getRuntimeArchSuffix', () => {
   it('returns -x64 or empty string', () => {
     const suffix = getRuntimeArchSuffix()
     expect(['-x64', '']).toContain(suffix)
+  })
+})
+
+// ─── runtimeJavaBinaryPath ────────────────────────────────────────────────────
+
+describe('runtimeJavaBinaryPath', () => {
+  it('matches the layout published by each runtime index', () => {
+    expect(runtimeJavaBinaryPath('linux')).toBe(path.join('bin', 'java'))
+    expect(runtimeJavaBinaryPath('darwin')).toBe(path.join('Contents', 'Home', 'bin', 'java'))
+    expect(runtimeJavaBinaryPath('win32', true)).toBe(path.join('bin', 'javaw.exe'))
+    expect(runtimeJavaBinaryPath('win32', false)).toBe(path.join('bin', 'java.exe'))
   })
 })
 

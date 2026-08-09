@@ -1,0 +1,247 @@
+name: Release dry run
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-dry-run-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Quality gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Print tool versions
+        run: |
+          node --version
+          npm --version
+
+      - name: Install dependencies
+        run: npm ci --strict-peer-deps
+
+      - name: Validate dependency tree
+        run: npm ls --all
+
+      - name: Prepare Electron binary
+        run: npm run prepare:electron
+
+      - name: Validate source and dependencies
+        run: |
+          npm run audit:production
+          npm run audit:full
+          npm run lint
+          npm run type-check
+          npm run test
+          npm run build
+
+  package-windows:
+    name: Unsigned NSIS
+    runs-on: windows-latest
+    needs: quality
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Print tool versions
+        run: |
+          node --version
+          npm --version
+
+      - name: Install dependencies
+        run: npm ci --strict-peer-deps
+
+      - name: Validate dependency tree
+        run: npm ls --all
+
+      - name: Prepare Electron binary
+        run: npm run prepare:electron
+
+      - name: Build unsigned NSIS installer
+        run: npm run package:win -- --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dry-run-windows-${{ github.run_id }}
+          path: |
+            dist/*.exe
+            dist/*.blockmap
+            dist/*.yml
+          if-no-files-found: error
+          retention-days: 7
+
+  package-macos:
+    name: Unsigned DMG (x64 and arm64)
+    runs-on: macos-latest
+    needs: quality
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Print tool versions
+        run: |
+          node --version
+          npm --version
+
+      - name: Install dependencies
+        run: npm ci --strict-peer-deps
+
+      - name: Validate dependency tree
+        run: npm ls --all
+
+      - name: Prepare Electron binary
+        run: npm run prepare:electron
+
+      - name: Build unsigned x64 and arm64 DMGs
+        run: npm run package:mac -- --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dry-run-macos-${{ github.run_id }}
+          path: |
+            dist/*.dmg
+            dist/*.blockmap
+            dist/*-mac.yml
+          if-no-files-found: error
+          retention-days: 7
+
+  package-linux:
+    name: AppImage and deb
+    runs-on: ubuntu-latest
+    needs: quality
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Print tool versions
+        run: |
+          node --version
+          npm --version
+
+      - name: Install dependencies
+        run: npm ci --strict-peer-deps
+
+      - name: Validate dependency tree
+        run: npm ls --all
+
+      - name: Prepare Electron binary
+        run: npm run prepare:electron
+
+      - name: Build AppImage and deb packages
+        run: npm run package:linux -- --publish never
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dry-run-linux-${{ github.run_id }}
+          path: |
+            dist/*.AppImage
+            dist/*.deb
+            dist/*-linux.yml
+          if-no-files-found: error
+          retention-days: 7
+
+  verify-artifacts:
+    name: Verify artifact round-trip and provenance
+    runs-on: ubuntu-latest
+    needs: [package-windows, package-macos, package-linux]
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Print tool versions
+        run: |
+          node --version
+          npm --version
+
+      - name: Install dependencies
+        run: npm ci --strict-peer-deps
+
+      - name: Validate dependency tree
+        run: npm ls --all
+
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: dry-run-*-${{ github.run_id }}
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Verify expected package formats
+        shell: bash
+        run: |
+          find release-artifacts -maxdepth 1 -type f -name '*.exe' -print -quit | grep -q .
+          find release-artifacts -maxdepth 1 -type f -name '*.dmg' ! -name '*arm64*' -print -quit | grep -q .
+          find release-artifacts -maxdepth 1 -type f -name '*arm64*.dmg' -print -quit | grep -q .
+          find release-artifacts -maxdepth 1 -type f -name '*.AppImage' -print -quit | grep -q .
+          find release-artifacts -maxdepth 1 -type f -name '*.deb' -print -quit | grep -q .
+
+      - name: Generate CycloneDX SBOM and checksums
+        shell: bash
+        run: |
+          npm sbom --sbom-format cyclonedx --sbom-type application > release-artifacts/SBOM.cdx.json
+          (
+            cd release-artifacts
+            find . -maxdepth 1 -type f ! -name SHA256SUMS.txt -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.txt
+          )
+
+      - name: Upload checksums and SBOM
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dry-run-security-metadata-${{ github.run_id }}
+          path: |
+            release-artifacts/SHA256SUMS.txt
+            release-artifacts/SBOM.cdx.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Attest dry-run packages and metadata
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release-artifacts/*

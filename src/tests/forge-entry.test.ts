@@ -1,76 +1,11 @@
-import { describe, it, expect } from 'vitest'
+import { describe, expect, it } from 'vitest'
 
-// ── Inline copies of helpers from install.service.ts ─────────────────────────
+import {
+  buildForgeEntry,
+  detectModLoader,
+  extractMavenVersion,
+} from '../main/services/install-helpers'
 
-function extractMavenVersion(libraryName: string): string {
-  const parts = libraryName.split(':')
-  if (parts.length < 3) {
-    throw new Error(`Cannot extract version from Maven coordinate: ${libraryName}`)
-  }
-  return parts[2]
-}
-
-function buildForgeEntry(
-  mcversion: string,
-  libraryName: string,
-): { mcversion: string; version: string } {
-  const mavenVersion = extractMavenVersion(libraryName)
-  const minor = parseInt(mcversion.split('.')[1] ?? '0', 10)
-
-  if (minor >= 7 && minor <= 8) {
-    const prefix = `${mcversion}-`
-    const suffix = `-${mcversion}`
-    if (mavenVersion.startsWith(prefix) && mavenVersion.endsWith(suffix)) {
-      return { mcversion, version: mavenVersion.slice(prefix.length, mavenVersion.length - suffix.length) }
-    }
-  }
-
-  return { mcversion, version: mavenVersion }
-}
-
-interface Library { name: string }
-
-interface FakeManifest {
-  versionManifest: { id: string; libraries?: Library[] }
-}
-
-function detectModLoader(manifest: FakeManifest): { loader: string; libraryName: string | null } {
-  const libraries = manifest.versionManifest.libraries ?? []
-  const versionId = manifest.versionManifest.id ?? ''
-
-  for (const lib of libraries) {
-    if (lib.name.includes('net.neoforged:neoforge:') || lib.name.includes('net.neoforged:forge:')) {
-      return { loader: 'neoforge', libraryName: lib.name }
-    }
-  }
-  for (const lib of libraries) {
-    if (lib.name.includes('net.minecraftforge:forge:')) {
-      return { loader: 'forge', libraryName: lib.name }
-    }
-  }
-
-  const idMatch = versionId.match(/^(\d+\.\d+(?:\.\d+)?)-(?:(neoforge)|(forge))-(.+)$/)
-  if (idMatch) {
-    const [, mcVersion, neoToken, , forgeVersion] = idMatch
-    if (neoToken) {
-      return { loader: 'neoforge', libraryName: `net.neoforged:neoforge:${forgeVersion}` }
-    }
-    return { loader: 'forge', libraryName: `net.minecraftforge:forge:${mcVersion}-${forgeVersion}` }
-  }
-
-  // Short-form NeoForge ID with no MC-version prefix, e.g. "neoforge-21.1.219"
-  const neoShortMatch = versionId.match(/^neoforge-(.+)$/)
-  if (neoShortMatch) {
-    return { loader: 'neoforge', libraryName: `net.neoforged:neoforge:${neoShortMatch[1]}` }
-  }
-
-  if (versionId.startsWith('fabric-loader-')) return { loader: 'fabric', libraryName: versionId }
-  if (versionId.startsWith('quilt-loader-')) return { loader: 'quilt', libraryName: versionId }
-
-  return { loader: 'vanilla', libraryName: null }
-}
-
-// ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe('extractMavenVersion', () => {
   it('extracts version from a standard Forge coordinate', () => {
@@ -214,5 +149,19 @@ describe('detectModLoader', () => {
       loader: 'neoforge',
       libraryName: 'net.neoforged:neoforge:20.6.100',
     })
+  })
+
+  it('detects Fabric and Quilt from their version ID prefixes', () => {
+    expect(detectModLoader({ versionManifest: { id: 'fabric-loader-0.16.10-1.21.1' } }))
+      .toEqual({ loader: 'fabric', libraryName: 'fabric-loader-0.16.10-1.21.1' })
+    expect(detectModLoader({ versionManifest: { id: 'quilt-loader-0.27.1-1.21.1' } }))
+      .toEqual({ loader: 'quilt', libraryName: 'quilt-loader-0.27.1-1.21.1' })
+  })
+
+  it('falls back to vanilla for an unknown or empty version ID', () => {
+    expect(detectModLoader({ versionManifest: { id: '1.21.1' } }))
+      .toEqual({ loader: 'vanilla', libraryName: null })
+    expect(detectModLoader({ versionManifest: {} }))
+      .toEqual({ loader: 'vanilla', libraryName: null })
   })
 })

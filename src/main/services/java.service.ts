@@ -18,18 +18,25 @@
 
 import path from 'node:path'
 import fs from 'node:fs/promises'
-import { pipeline } from 'node:stream/promises'
-import { Readable } from 'node:stream'
+import crypto from 'node:crypto'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { app } from 'electron'
 
 import { Constants, fmt } from '../constants'
 import { logger } from '../logger'
 import type { ModpackManifest, InstallProgressEvent } from '../../shared/types'
-import { fetchWithRetry, createHashingStream, detectHashAlgorithm } from '../fetch-retry'
+import { assertSafeRelativePath, requireHttpsUrl, ValidationError } from '../../shared/validation'
+import { fetchWithRetry, detectHashAlgorithm, readJsonResponseLimited } from '../fetch-retry'
+import { downloadFile, isStrongHash, normalizeHash } from '../download-manager'
+import { assertContainedNoLinks, assertSafeDownloadDestination, readSafeRegularFile } from '../filesystem-safety'
+import { atomicWriteFile } from './config.service'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 /** Minimal shape of the custom JRE index JSON at launcher.myftb.de/{runtime}.json */
+const execFileAsync = promisify(execFile)
+
 interface RuntimeIndex {
   objects: Array<{
     path: string
@@ -101,6 +108,16 @@ export function getRuntimePlatform(): string {
  */
 export function getRuntimeArchSuffix(): string {
   return process.arch.includes('64') ? '-x64' : ''
+}
+
+/** Relative Java binary path used by the runtime indexes on each platform. */
+export function runtimeJavaBinaryPath(
+  platform: NodeJS.Platform = process.platform,
+  launchBinary = true,
+): string {
+  if (platform === 'darwin') return path.join('Contents', 'Home', 'bin', 'java')
+  if (platform === 'win32') return path.join('bin', launchBinary ? 'javaw.exe' : 'java.exe')
+  return path.join('bin', 'java')
 }
 
 /**
@@ -240,18 +257,65 @@ function getRuntimesRoot(): string {
 /** Marker file written after a JRE runtime downloads completely. */
 const RUNTIME_COMPLETE_MARKER = '.complete'
 
+async function recoverRuntimeArtifacts(runtimeName: string): Promise<void> {
+  validateRuntimeName(runtimeName)
+  const root = getRuntimesRoot()
+  await fs.mkdir(root, { recursive: true })
+  const rootStat = await fs.lstat(root)
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
+    throw new ValidationError('Der JRE-Stammordner ist kein sicherer Ordner.')
+  }
+  const runtimeDir = path.join(root, runtimeName)
+  const prefix = `${runtimeName}.rollback-`
+  const candidates = (await fs.readdir(root, { withFileTypes: true }))
+    .filter((entry) => entry.name.startsWith(prefix))
+    .map((entry) => path.join(root, entry.name))
+  let runtimeExists = false
+  try {
+    const stat = await fs.lstat(runtimeDir)
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      throw new ValidationError('Der JRE-Laufzeitpfad ist kein sicherer Ordner.')
+    }
+    runtimeExists = true
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  }
+  if (!runtimeExists) {
+    for (const candidate of candidates) {
+      const stat = await fs.lstat(candidate).catch(() => null)
+      if (!stat?.isDirectory() || stat.isSymbolicLink()) continue
+      try {
+        await fs.rename(candidate, runtimeDir)
+        runtimeExists = true
+        break
+      } catch {
+        // Try another valid rollback generation.
+      }
+    }
+  }
+  if (runtimeExists) {
+    await Promise.all(candidates.map((candidate) => fs.rm(candidate, { recursive: true, force: true }).catch(() => {})))
+  }
+}
+
 /**
  * Returns the java[w.exe] binary path for a cached runtime, or null if not
  * yet downloaded or if the previous download was incomplete.
  */
 async function getCachedRuntimeBin(runtimeName: string): Promise<string | null> {
+  await recoverRuntimeArtifacts(runtimeName)
   const runtimeDir = path.join(getRuntimesRoot(), runtimeName)
-  const bin = process.platform === 'win32' ? 'javaw.exe' : 'java'
-  const binPath = path.join(runtimeDir, 'bin', bin)
+  const binPath = path.join(runtimeDir, runtimeJavaBinaryPath())
   try {
-    await fs.access(binPath)
-    await fs.access(path.join(runtimeDir, RUNTIME_COMPLETE_MARKER))
-    return binPath
+    const marker = JSON.parse(await fs.readFile(path.join(runtimeDir, RUNTIME_COMPLETE_MARKER), 'utf8')) as unknown
+    if (
+      typeof marker !== 'object'
+      || marker === null
+      || (marker as { version?: unknown }).version !== 1
+      || (marker as { runtime?: unknown }).runtime !== runtimeName
+    ) return null
+    const stat = await fs.stat(binPath)
+    return stat.isFile() && stat.size > 0 ? binPath : null
   } catch {
     return null
   }
@@ -311,6 +375,30 @@ export async function resolveJavaPath(manifest: ModpackManifest): Promise<string
   return process.platform === 'win32' ? 'java.exe' : 'java'
 }
 
+const runtimeFlights = new Map<string, Promise<void>>()
+
+async function runtimeFileMatches(filePath: string, expected: string): Promise<boolean> {
+  try {
+    const hash = crypto.createHash(detectHashAlgorithm(normalizeHash(expected)))
+    const handle = await fs.open(filePath, 'r')
+    try {
+      for await (const chunk of handle.createReadStream()) hash.update(chunk as Buffer)
+    } finally {
+      await handle.close().catch(() => {})
+    }
+    return hash.digest('hex').toLowerCase() === normalizeHash(expected)
+  } catch {
+    return false
+  }
+}
+
+function validateRuntimeName(value: string): string {
+  if (!/^[A-Za-z0-9._-]{1,128}$/.test(value) || value === '.' || value === '..') {
+    throw new ValidationError('Der Runtime-Name ist ungültig.')
+  }
+  return value
+}
+
 /**
  * Ensure the appropriate JRE is downloaded and ready.
  *
@@ -330,125 +418,165 @@ export async function ensureRuntime(
   onProgress: (event: InstallProgressEvent) => void,
 ): Promise<EnsureRuntimeCounters> {
   let { total, finished, failed } = base
-  const effectiveRuntime = manifest.runtime ?? inferRuntime(manifest.gameVersion)
+  const effectiveRuntime = validateRuntimeName(manifest.runtime ?? inferRuntime(manifest.gameVersion))
+  if (await getCachedRuntimeBin(effectiveRuntime)) return { total, finished, failed }
 
-  // Skip if already cached
-  const cached = await getCachedRuntimeBin(effectiveRuntime)
-  if (cached) {
-    logger.info(`[JavaService] Runtime '${effectiveRuntime}' already cached, skipping download`)
+  const existing = runtimeFlights.get(effectiveRuntime)
+  if (existing) {
+    await new Promise<void>((resolve, reject) => {
+      const onAbort = (): void => reject(signal.reason ?? new DOMException('Abgebrochen', 'AbortError'))
+      signal.addEventListener('abort', onAbort, { once: true })
+      existing.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort))
+    })
     return { total, finished, failed }
   }
 
-  const platform = getRuntimePlatform()
-  const arch = getRuntimeArchSuffix()
-  const runtimeIndexName = `${effectiveRuntime}-${platform}${arch}`
-  const runtimeIndexUrl = fmt(Constants.runtimeIndex, runtimeIndexName)
-
-  onProgress({ total, finished, failed, currentFile: 'JRE-Index wird geladen...' })
-
-  const indexRes = await fetchWithRetry(runtimeIndexUrl, {
-    signal,
-    timeoutMs: Constants.connectTimeoutMs,
-  })
-  if (!indexRes.ok) {
-    throw new Error(
-      `Failed to fetch runtime index "${runtimeIndexName}": ` +
-        `${indexRes.status} ${indexRes.statusText}`,
-    )
-  }
-  const runtimeIndex = (await indexRes.json()) as RuntimeIndex
-
-  const runtimeDir = path.join(getRuntimesRoot(), effectiveRuntime)
-  // Clean up incomplete previous download (missing .complete marker)
-  try {
-    await fs.access(runtimeDir)
-    logger.info(`[JavaService] Removing incomplete runtime '${effectiveRuntime}' for re-download`)
-    await fs.rm(runtimeDir, { recursive: true, force: true })
-  } catch {
-    // Directory does not exist - first download
-  }
-  await fs.mkdir(runtimeDir, { recursive: true })
-
-  const objects = runtimeIndex.objects
-  total += objects.length
-  logger.info(`[JavaService] Downloading runtime '${effectiveRuntime}': ${objects.length} file(s)...`)
-
-  onProgress({ total, finished, failed, currentFile: 'JRE wird installiert...' })
-
-  // Download concurrently with a small worker pool
-  const CONCURRENCY = 4
-  let queueIndex = 0
-  const failedBefore = failed
-
-  const downloadWorker = async (): Promise<void> => {
-    while (queueIndex < objects.length) {
-      const obj = objects[queueIndex++]
-      signal.throwIfAborted()
-
-      const dest = path.join(runtimeDir, obj.path)
-      await fs.mkdir(path.dirname(dest), { recursive: true })
-
-      try {
-        const res = await fetchWithRetry(obj.url, {
-          signal,
-          timeoutMs: Constants.socketTimeoutMs,
-        })
-        if (!res.ok) {
-          throw new Error(`HTTP ${res.status} ${res.statusText} for ${obj.url}`)
-        }
-        const { stream: hasher, digest } = createHashingStream(detectHashAlgorithm(obj.hash))
-        const fileHandle = await fs.open(dest, 'w')
-        try {
-          await pipeline(
-            Readable.fromWeb(res.body as import('node:stream/web').ReadableStream),
-            hasher,
-            fileHandle.createWriteStream(),
-          )
-        } finally {
-          await fileHandle.close()
-        }
-        if (obj.hash) {
-          const actualHash = digest()
-          if (actualHash !== obj.hash) {
-            await fs.unlink(dest).catch(() => {})
-            throw new Error(`Hash mismatch for ${obj.path}: expected ${obj.hash}, got ${actualHash}`)
-          }
-        }
-        finished++
-      } catch (err: unknown) {
-        if ((err as Error).name === 'AbortError') throw err
-        logger.warn(`[JavaService] Failed to download JRE file ${obj.path}:`, err)
-        failed++
-      }
-
-      onProgress({ total, finished, failed, currentFile: obj.path })
-    }
-  }
-
-  const workers: Promise<void>[] = []
-  for (let i = 0; i < Math.min(CONCURRENCY, objects.length); i++) {
-    workers.push(downloadWorker())
-  }
-  await Promise.all(workers)
-
-  // Make java binary executable on POSIX
-  if (process.platform !== 'win32') {
-    const javaBin = path.join(runtimeDir, 'bin', 'java')
-    await fs.chmod(javaBin, 0o755).catch(() => {
-      // Best-effort - binary path may differ across runtime distributions
+  const operation = (async (): Promise<void> => {
+    const runtimeIndexName = `${effectiveRuntime}-${getRuntimePlatform()}${getRuntimeArchSuffix()}`
+    const runtimeIndexUrl = fmt(Constants.runtimeIndex, runtimeIndexName)
+    onProgress({ total, finished, failed, currentFile: 'JRE-Index wird geladen...' })
+    const indexResponse = await fetchWithRetry(runtimeIndexUrl, {
+      signal,
+      timeoutMs: Constants.connectTimeoutMs,
     })
-  }
+    if (!indexResponse.ok) throw new Error(`JRE-Index konnte nicht geladen werden (HTTP ${indexResponse.status}).`)
+    const rawIndex = await readJsonResponseLimited(indexResponse, 50 * 1024 * 1024) as RuntimeIndex
+    if (!rawIndex || !Array.isArray(rawIndex.objects) || rawIndex.objects.length > 20_000) {
+      throw new ValidationError('Der JRE-Index ist ungültig.')
+    }
 
-  // Mark runtime as complete only if all files succeeded
-  if (failed === failedBefore) {
-    await fs.writeFile(path.join(runtimeDir, RUNTIME_COMPLETE_MARKER), '', 'utf8')
-    logger.info(`[JavaService] Runtime '${effectiveRuntime}' downloaded successfully`)
-  } else {
-    logger.warn(
-      `[JavaService] Runtime '${effectiveRuntime}' has ${failed - failedBefore} failed file(s) - ` +
-        'will retry on next install',
+    const seen = new Set<string>()
+    const objects = rawIndex.objects.map((object) => {
+      const objectPath = assertSafeRelativePath(object.path, 'JRE-Objektpfad')
+      if (seen.has(objectPath)) throw new ValidationError('Der JRE-Index enthält doppelte Objektpfade.')
+      seen.add(objectPath)
+      const hash = normalizeHash(object.hash)
+      if (!/^[0-9a-f]+$/.test(hash) || !isStrongHash(hash)) {
+        throw new ValidationError('Der JRE-Index enthält keine starke SHA-256/SHA-512-Prüfsumme.')
+      }
+      return {
+        path: objectPath,
+        url: requireHttpsUrl(object.url, 'JRE-Download'),
+        hash,
+      }
+    })
+    const indexDigest = crypto.createHash('sha256').update(JSON.stringify(objects)).digest('hex')
+    total += objects.length
+    onProgress({ total, finished, failed, currentFile: 'JRE wird installiert...' })
+
+    const runtimesRoot = getRuntimesRoot()
+    await fs.mkdir(runtimesRoot, { recursive: true })
+    const runtimeDir = path.join(runtimesRoot, effectiveRuntime)
+    const stagingDir = `${runtimeDir}.staging`
+    const stagingStatePath = path.join(stagingDir, '.myftb-runtime-staging.json')
+    await assertContainedNoLinks(runtimesRoot, stagingDir, { includeLeaf: true, label: 'JRE-Stagingpfad' })
+    let reusableStaging = false
+    try {
+      const stagingStat = await fs.lstat(stagingDir)
+      if (!stagingStat.isDirectory() || stagingStat.isSymbolicLink()) {
+        throw new ValidationError('Der JRE-Stagingpfad ist kein sicherer Ordner.')
+      }
+      const stateContents = await readSafeRegularFile(stagingStatePath, {
+        maxBytes: 16 * 1024,
+        label: 'JRE-Stagingstatus',
+      })
+      const state = JSON.parse(stateContents.toString('utf8')) as {
+        version?: unknown
+        indexDigest?: unknown
+        createdAt?: unknown
+      }
+      reusableStaging = state.version === 1
+        && state.indexDigest === indexDigest
+        && typeof state.createdAt === 'number'
+        && Date.now() - state.createdAt < 7 * 24 * 60 * 60 * 1_000
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        logger.warn(`[JavaService] Discarding incompatible runtime staging for '${effectiveRuntime}'`)
+      }
+    }
+    if (!reusableStaging) {
+      await fs.rm(stagingDir, { recursive: true, force: true })
+    }
+    await fs.mkdir(stagingDir, { recursive: true })
+    await assertContainedNoLinks(runtimesRoot, stagingDir, { includeLeaf: true, label: 'JRE-Stagingpfad' })
+    if (!reusableStaging) {
+      await atomicWriteFile(stagingStatePath, `${JSON.stringify({
+        version: 1,
+        indexDigest,
+        createdAt: Date.now(),
+      })}\n`)
+    }
+
+    let queueIndex = 0
+    const failures: string[] = []
+    const worker = async (): Promise<void> => {
+      for (;;) {
+        const index = queueIndex++
+        if (index >= objects.length) return
+        const object = objects[index]
+        signal.throwIfAborted()
+        const destination = path.resolve(stagingDir, object.path)
+        if (!destination.startsWith(path.resolve(stagingDir) + path.sep)) {
+          throw new ValidationError('Ein JRE-Objekt verlässt den Stagingordner.')
+        }
+        await assertSafeDownloadDestination(runtimesRoot, destination, 'JRE-Objektpfad')
+        try {
+          if (!await runtimeFileMatches(destination, object.hash)) {
+            await downloadFile({
+              url: object.url,
+              target: destination,
+              hash: object.hash,
+              signal,
+              requireStrongHash: true,
+              taskName: object.path,
+            })
+          }
+          finished++
+        } catch (error) {
+          if (error instanceof Error && error.name === 'AbortError') throw error
+          failed++
+          failures.push(`${object.path}: ${error instanceof Error ? error.message : 'Download fehlgeschlagen'}`)
+        }
+        onProgress({ total, finished, failed, currentFile: object.path })
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(4, objects.length) }, () => worker()))
+    if (failures.length) throw new Error(`${failures.length} JRE-Datei(en) konnten nicht sicher geladen werden.`)
+
+    const javaBinary = path.join(stagingDir, runtimeJavaBinaryPath(process.platform, true))
+    const validationBinary = path.join(stagingDir, runtimeJavaBinaryPath(process.platform, false))
+    for (const binary of new Set([javaBinary, validationBinary])) {
+      const javaStat = await fs.stat(binary)
+      if (!javaStat.isFile() || javaStat.size === 0) throw new Error('Die geladene JRE enthält keine gültige Java-Datei.')
+      if (process.platform !== 'win32') await fs.chmod(binary, 0o755)
+    }
+    await execFileAsync(validationBinary, ['-version'], { timeout: 15_000, windowsHide: true, maxBuffer: 1024 * 1024 })
+    await fs.rm(stagingStatePath, { force: true })
+    await atomicWriteFile(
+      path.join(stagingDir, RUNTIME_COMPLETE_MARKER),
+      `${JSON.stringify({ version: 1, runtime: effectiveRuntime, indexDigest })}\n`,
     )
-  }
 
-  return { total, finished, failed }
+    const backup = `${runtimeDir}.rollback-${process.pid}-${crypto.randomUUID()}`
+    let hadPrevious = false
+    try {
+      try { await fs.rename(runtimeDir, backup); hadPrevious = true } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      }
+      await fs.rename(stagingDir, runtimeDir)
+      if (hadPrevious) await fs.rm(backup, { recursive: true, force: true })
+    } catch (error) {
+      if (hadPrevious) await fs.rename(backup, runtimeDir).catch(() => {})
+      throw error
+    }
+    logger.info(`[JavaService] Runtime '${effectiveRuntime}' committed successfully`)
+  })()
+
+  runtimeFlights.set(effectiveRuntime, operation)
+  try {
+    await operation
+    return { total, finished, failed }
+  } finally {
+    if (Object.is(runtimeFlights.get(effectiveRuntime), operation)) runtimeFlights.delete(effectiveRuntime)
+  }
 }

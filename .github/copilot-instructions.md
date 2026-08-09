@@ -2,27 +2,58 @@
 
 Cross-platform Electron app (Windows/macOS/Linux) for discovering, installing, and launching Minecraft modpacks from myftb.de.
 
+## Toolchain
+
+Use Node.js `24.18.1` (or a newer Node 24 LTS patch) with its bundled npm `11.16.0` or newer. Select Node with `.nvmrc`, then install dependencies with:
+
+```bash
+nvm use
+npm ci --strict-peer-deps
+npm run prepare:electron
+```
+
+Electron 43 downloads its binary on demand. Development and preview scripts prepare it automatically; run the preparation script explicitly before packaging or direct build jobs.
+
 ## Commands
 
 ```bash
-npm run dev           # Start dev server with HMR (electron-vite)
-npm run build         # Production build → out/
-npm run test          # Run all tests once (vitest run)
-npm run test:watch    # Run tests in watch mode
-npm run lint          # ESLint (0 warnings allowed)
-npm run type-check    # tsc --noEmit for both main and renderer tsconfigs
-npm run package       # Build + package with electron-builder
+npm run dev               # Start electron-vite with HMR
+npm run build             # Build the production app in out/
+npm run test              # Run all tests once
+npm run test:watch        # Run tests in watch mode
+npm run lint              # Run ESLint with no warnings
+npm run type-check        # Check the main and renderer tsconfigs
+npm run package           # Build and package with electron-builder
+npm run prepare:electron  # Download the locked Electron binary
+npm run audit:production  # Audit runtime dependencies
+npm run audit:full        # Audit all dependencies
 ```
 
 Run a single test file:
 ```bash
-npx vitest run src/tests/auth-profiles.test.ts
+npm run test -- src/tests/auth-profiles.test.ts
 ```
 
 Run tests matching a name pattern:
 ```bash
-npx vitest run -t "isLoggedIn"
+npm run test -- -t "isLoggedIn"
 ```
+
+## Dependency policy
+
+Use stable releases for direct dependencies, tools, and GitHub Actions. Do not add direct prerelease versions.
+
+Keep these compatibility holds:
+
+- `electron-vite@5` supports Vite through version 7. Do not upgrade to Vite 8 yet.
+- `@vitejs/plugin-react@6` requires Vite 8. Keep plugin-react on version 5.
+- `typescript-eslint@8.66` supports TypeScript below 6.1. Keep TypeScript at `6.0.3`.
+- Keep Node types on version 24 for Node 24 and Electron 43.
+- Use Undici 8 for launcher HTTP. Use the `undici-xmcl` Undici 7 alias only for XMCL.
+
+The XMCL 6.3.1 package metadata is invalid. Keep its narrow overrides and version-checked postinstall repair until a verified stable XMCL release replaces them.
+
+Regenerate the lockfile with the npm version bundled with the Node release in `.nvmrc`. Verify changes with `npm ci --strict-peer-deps`, `npm ls --all`, and both audit scripts.
 
 ## Architecture
 
@@ -32,7 +63,7 @@ Three Electron processes with strict boundaries:
 src/main/       — Node.js main process (file system, Minecraft launch, auth)
 src/preload/    — Bridge: exposes window.electronAPI via contextBridge
 src/renderer/   — React UI (no direct Node access)
-src/shared/     — Types shared across all three processes
+src/shared/     — Shared types and pure runtime validation
 src/tests/      — Vitest tests (pure logic only, no Electron/DOM)
 ```
 
@@ -108,7 +139,7 @@ The app uses a custom dark theme — always use semantic tokens, not raw hex:
 | `border` | `#3a3a3a` |
 | `border-focus` | `#83da38` |
 
-Font family: `font-sans` → Lato.
+Font family: `font-sans` → Outfit Variable.
 
 ### API endpoints & CORS
 The `packs.myftb.de` backend has **no CORS headers** — all HTTP requests to these endpoints must be made in the **main process** (Node.js fetch), never from the renderer.
@@ -132,7 +163,7 @@ Microsoft Azure OAuth Client ID: `e9b5325d-45dd-4f9b-b989-a4e23fa2e62b`
 - **MC 1.7.x / 1.8.x** → URL template is `{mcversion}-{version}-{mcversion}`, so `version` must be the bare build number only (e.g., `10.13.4.1614`)
 - **Modern MC** → `version` is the full Maven artifact version (e.g., `1.20.1-47.2.0`)
 
-The pack manifest stores the full Maven coordinate (e.g., `net.minecraftforge:forge:1.7.10-10.13.4.1614-1.7.10`). For 1.7.x/1.8.x you must strip the `{mcversion}-` prefix and `-{mcversion}` suffix before passing to `installForge`. This logic lives in `buildForgeEntry()` in `install.service.ts`. Do not call `getForgeVersionList` — it does HTML scraping and is unreliable; always construct the entry directly from manifest data.
+The pack manifest stores the full Maven coordinate (e.g., `net.minecraftforge:forge:1.7.10-10.13.4.1614-1.7.10`). For 1.7.x/1.8.x you must strip the `{mcversion}-` prefix and `-{mcversion}` suffix before passing to `installForge`. This logic lives in `buildForgeEntry()` in `src/main/services/install-helpers.ts`. Do not call `getForgeVersionList` — it does HTML scraping and is unreliable; always construct the entry directly from manifest data.
 
 **`AggregateError` from `@xmcl`**  
 Download/validation failures from `@xmcl/file-transfer` are thrown as `AggregateError`. Its `.message` is empty — always fall back to `err.constructor.name` when surfacing errors from `@xmcl` operations.
@@ -143,7 +174,7 @@ Download/validation failures from `@xmcl/file-transfer` are thrown as `Aggregate
 - `systemOpenUrl` enforces a domain allowlist (`myftb.de`, `minecraft.net`, `microsoft.com`, `live.com`) — maintain this when adding new outbound links.
 
 ### Custom title bar
-`frame: false` — the app has no OS chrome. Window controls (minimize/maximize/close) are rendered by `TitleBar.tsx` and routed through `ipcMain.on('window:minimize' | 'window:maximize' | 'window:close')`.
+Windows and Linux use frameless launcher windows. Linux also sets `roundedCorners: false` to preserve square corners on Electron 43. macOS keeps its native frame and hidden title bar. Window controls route through the validated window IPC channels.
 
 ### Testing conventions
 - Tests live in `src/tests/` and are pure TypeScript (Node environment, no browser globals).

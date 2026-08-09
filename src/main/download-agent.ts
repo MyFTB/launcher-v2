@@ -13,7 +13,11 @@
  * with congested networks and slow CDN routing.
  */
 import { Agent, interceptors } from 'undici'
-import type { RetryHandler } from 'undici'
+import {
+  Agent as XmclAgent,
+  interceptors as xmclInterceptors,
+} from 'undici-xmcl'
+import type { RetryHandler as XmclRetryHandler } from 'undici-xmcl'
 
 import { Constants } from './constants'
 
@@ -28,7 +32,7 @@ export const downloadDispatcher = new Agent({
   interceptors.redirect({ maxRedirections: 5 }),
 )
 
-const RETRY_OPTIONS: RetryHandler.RetryOptions = {
+const XMCL_RETRY_OPTIONS: XmclRetryHandler.RetryOptions = {
   maxRetries: 3,
   minTimeout: 1_000,
   maxTimeout: 10_000,
@@ -42,13 +46,17 @@ const RETRY_OPTIONS: RetryHandler.RetryOptions = {
 }
 
 /**
- * Extended dispatcher for @xmcl/installer downloads.
- * Adds undici's built-in retry interceptor on top of the base config.
+ * Build the Undici 7 dispatcher required by @xmcl/installer.
+ * Launcher-owned requests stay on the separate Undici 8 dispatcher above.
  */
-export const xmclDownloadDispatcher = new Agent({
-  connections: 16,
-  connect: { timeout: Constants.connectTimeoutMs },
-}).compose(
-  interceptors.retry(RETRY_OPTIONS),
-  interceptors.redirect({ maxRedirections: 5 }),
-)
+export function createXmclDownloadDispatcher() {
+  return new XmclAgent({
+    connections: 16,
+    connect: { timeout: Constants.connectTimeoutMs },
+  }).compose(
+    xmclInterceptors.retry(XMCL_RETRY_OPTIONS),
+    xmclInterceptors.redirect({ maxRedirections: 5 }),
+  )
+}
+
+export const xmclDownloadDispatcher = createXmclDownloadDispatcher()

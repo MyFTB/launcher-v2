@@ -9,13 +9,14 @@ import { useModpackStore } from './store/modpack.store'
 import '@fontsource-variable/outfit'
 import './index.css'
 
-// Wire push-event listeners that drive store state.
-// initListeners() is idempotent and must be called before any component mounts.
-useLaunchStore.getState().initListeners()
-useAuthStore.getState().initListeners()
-useModpackStore.getState().initListeners()
-
 const isStandalone = new URLSearchParams(window.location.search).has('standalone')
+
+// The detached console has a deliberately restricted preload API.
+useLaunchStore.getState().initListeners()
+if (!isStandalone) {
+  useAuthStore.getState().initListeners()
+  useModpackStore.getState().initListeners()
+}
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
