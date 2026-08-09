@@ -107,10 +107,10 @@ async function uploadToPaste(text: string): Promise<string> {
   if (Buffer.byteLength(text, 'utf8') > 10 * 1024 * 1024) {
     throw new IpcError('INVALID_PAYLOAD', 'Der Log ist zu groß zum Hochladen.')
   }
-  // CodeQL[js/file-access-to-http]: Only an explicit crash-report upload reaches this fixed HTTPS endpoint; data is bounded and redacted first.
+  const redacted = redactSensitiveLogData(text)
   const response = await fetch(`${Constants.pasteTarget}/documents`, {
     method: 'POST',
-    body: Buffer.from(text, 'utf8'),
+    body: Buffer.from(redacted, 'utf8'), // codeql[js/file-access-to-http] explicit user-requested diagnostic upload to a fixed HTTPS endpoint
     signal: AbortSignal.timeout(Constants.connectTimeoutMs),
   })
   if (!response.ok) throw new Error(`Log-Upload fehlgeschlagen (HTTP ${response.status}).`)
@@ -834,7 +834,7 @@ class LaunchService {
       maxBytes: 10 * 1024 * 1024,
       label: 'Absturzbericht',
     })
-    return uploadToPaste(redactSensitiveLogData(report.toString('utf8')))
+    return uploadToPaste(report.toString('utf8'))
   }
 }
 
