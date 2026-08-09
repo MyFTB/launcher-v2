@@ -5,7 +5,6 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
-  readFileSync,
   renameSync,
   rmSync,
   writeFileSync,
@@ -15,6 +14,7 @@ import os from 'node:os'
 import crypto from 'node:crypto'
 import type { DataRecoveryState } from '../shared/types'
 import { parseDataDirPointer } from '../shared/pointer-file'
+import { readSafeRegularFileSync } from './filesystem-safety'
 
 let pointerRecovery: DataRecoveryState = { status: 'ok' }
 
@@ -53,9 +53,10 @@ function validatePointerTarget(candidate: string | null): string | null {
 }
 
 function readValidPointer(pointerPath: string): string | null {
-  const stat = lstatSync(pointerPath)
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 64 * 1024) return null
-  const raw = readFileSync(pointerPath, 'utf8')
+  const raw = readSafeRegularFileSync(pointerPath, {
+    maxBytes: 64 * 1024,
+    label: 'Datenspeicherzeiger',
+  }).toString('utf8')
   return validatePointerTarget(parseDataDirPointer(raw))
 }
 

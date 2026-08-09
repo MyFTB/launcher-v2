@@ -18,6 +18,7 @@ import { IpcError, noPayload, requireObject, secureHandle } from '../ipc/securit
 import { getMainWindow } from '../app-state'
 import { atomicWriteFile, configService } from './config.service'
 import { logger } from '../logger'
+import { readSafeRegularFile } from '../filesystem-safety'
 
 interface UpdateCandidate {
   version: string
@@ -123,12 +124,11 @@ class UpdateService {
 
   private async recoverUpdateJournal(): Promise<void> {
     try {
-      const stat = await fs.lstat(this.journalPath)
-      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 64 * 1024) {
-        throw new Error('Update journal is not a safe regular file')
-      }
-      const raw = await fs.readFile(this.journalPath, 'utf8')
-      const journal = parseUpdateJournal(JSON.parse(raw) as unknown)
+      const raw = await readSafeRegularFile(this.journalPath, {
+        maxBytes: 64 * 1024,
+        label: 'Update-Protokoll',
+      })
+      const journal = parseUpdateJournal(JSON.parse(raw.toString('utf8')) as unknown)
       const checksum = await this.configChecksum()
       if (app.getVersion() === journal.targetVersion && checksum === journal.configChecksum) {
         await fs.rm(this.journalPath, { force: true })

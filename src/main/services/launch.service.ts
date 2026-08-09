@@ -17,8 +17,8 @@ import { installService } from './install.service'
 import { resolveJavaPath } from './java.service'
 import { discordService } from './discord.service'
 import { packOperationService, PackOperationConflictError } from './pack-operation.service'
-import { logger } from '../logger'
-import { assertContainedNoLinks } from '../filesystem-safety'
+import { logger, redactSensitiveLogData } from '../logger'
+import { assertContainedNoLinks, readSafeRegularFile } from '../filesystem-safety'
 import { fetchWithRetry, readJsonResponseLimited } from '../fetch-retry'
 import type {
   LaunchCreateShortcutPayload,
@@ -107,6 +107,7 @@ async function uploadToPaste(text: string): Promise<string> {
   if (Buffer.byteLength(text, 'utf8') > 10 * 1024 * 1024) {
     throw new IpcError('INVALID_PAYLOAD', 'Der Log ist zu groß zum Hochladen.')
   }
+  // CodeQL[js/file-access-to-http]: Only an explicit crash-report upload reaches this fixed HTTPS endpoint; data is bounded and redacted first.
   const response = await fetch(`${Constants.pasteTarget}/documents`, {
     method: 'POST',
     body: Buffer.from(text, 'utf8'),
@@ -251,11 +252,11 @@ class LaunchService {
 
   async initialize(): Promise<void> {
     try {
-      const registryStat = await fs.lstat(this.registryPath)
-      if (!registryStat.isFile() || registryStat.isSymbolicLink() || registryStat.size > 1024 * 1024) {
-        throw new Error('Invalid launch-session registry file')
-      }
-      const raw = JSON.parse(await fs.readFile(this.registryPath, 'utf8')) as unknown
+      const registryContents = await readSafeRegularFile(this.registryPath, {
+        maxBytes: 1024 * 1024,
+        label: 'Start-Sitzungsregister',
+      })
+      const raw = JSON.parse(registryContents.toString('utf8')) as unknown
       if (Array.isArray(raw)) {
         const restoredPids = new Set<number>()
         for (const candidate of raw.slice(0, 20)) {
@@ -823,14 +824,17 @@ class LaunchService {
         const filePath = path.join(crashDir, entry.name)
         const stat = await fs.lstat(filePath)
         if (!stat.isFile() || stat.isSymbolicLink()) return null
-        return { filePath, mtime: stat.mtimeMs, size: stat.size }
+        return { filePath, mtime: stat.mtimeMs }
       }))
     const latest = candidates
       .filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null)
       .sort((a, b) => b.mtime - a.mtime)[0]
     if (!latest) throw new IpcError('NOT_FOUND', 'Kein Absturzbericht wurde gefunden.')
-    if (latest.size > 10 * 1024 * 1024) throw new IpcError('INVALID_PAYLOAD', 'Der Absturzbericht ist zu groß.')
-    return uploadToPaste(await fs.readFile(latest.filePath, 'utf8'))
+    const report = await readSafeRegularFile(latest.filePath, {
+      maxBytes: 10 * 1024 * 1024,
+      label: 'Absturzbericht',
+    })
+    return uploadToPaste(redactSensitiveLogData(report.toString('utf8')))
   }
 }
 

@@ -26,7 +26,7 @@ import {
 import { redactSensitiveLogData } from '../main/logger'
 import { packOperationService } from '../main/services/pack-operation.service'
 import { resolveActiveTasks, resolveTaskPathCollisions } from '../main/services/install.service'
-import { assertSafeDownloadDestination } from '../main/filesystem-safety'
+import { assertSafeDownloadDestination, readSafeRegularFile } from '../main/filesystem-safety'
 import { isAllowedExternalUrl } from '../main/security/url-policy'
 
 describe('validated account-switch contract', () => {
@@ -230,6 +230,25 @@ describe('symlink-safe managed destinations', () => {
     await assertSafeDownloadDestination(root, path.join(root, 'stage', 'file.jar'))
     await fs.symlink(outside, path.join(root, 'stage', 'linked'), process.platform === 'win32' ? 'junction' : 'dir')
     await expect(assertSafeDownloadDestination(root, path.join(root, 'stage', 'linked', 'file.jar'))).rejects.toThrow(/Link|Junction/)
+  })
+
+  it('reads only validated, size-bounded regular files', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'myftb-safe-file-'))
+    temporaryDirectories.push(root)
+    const filePath = path.join(root, 'data.json')
+    await fs.writeFile(filePath, '{"safe":true}')
+
+    await expect(readSafeRegularFile(filePath, { maxBytes: 64, label: 'Testdatei' }))
+      .resolves.toEqual(Buffer.from('{"safe":true}'))
+    await expect(readSafeRegularFile(filePath, { maxBytes: 4, label: 'Testdatei' }))
+      .rejects.toThrow(/sichere reguläre Datei/)
+
+    if (process.platform !== 'win32') {
+      const linkPath = path.join(root, 'linked.json')
+      await fs.symlink(filePath, linkPath)
+      await expect(readSafeRegularFile(linkPath, { maxBytes: 64, label: 'Testdatei' }))
+        .rejects.toThrow(/sichere reguläre Datei/)
+    }
   })
 })
 

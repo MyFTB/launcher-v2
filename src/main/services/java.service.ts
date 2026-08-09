@@ -29,7 +29,7 @@ import type { ModpackManifest, InstallProgressEvent } from '../../shared/types'
 import { assertSafeRelativePath, requireHttpsUrl, ValidationError } from '../../shared/validation'
 import { fetchWithRetry, detectHashAlgorithm, readJsonResponseLimited } from '../fetch-retry'
 import { downloadFile, isStrongHash, normalizeHash } from '../download-manager'
-import { assertContainedNoLinks, assertSafeDownloadDestination } from '../filesystem-safety'
+import { assertContainedNoLinks, assertSafeDownloadDestination, readSafeRegularFile } from '../filesystem-safety'
 import { atomicWriteFile } from './config.service'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -476,11 +476,11 @@ export async function ensureRuntime(
       if (!stagingStat.isDirectory() || stagingStat.isSymbolicLink()) {
         throw new ValidationError('Der JRE-Stagingpfad ist kein sicherer Ordner.')
       }
-      const stateStat = await fs.lstat(stagingStatePath)
-      if (!stateStat.isFile() || stateStat.isSymbolicLink() || stateStat.size > 16 * 1024) {
-        throw new Error('Invalid runtime staging state')
-      }
-      const state = JSON.parse(await fs.readFile(stagingStatePath, 'utf8')) as {
+      const stateContents = await readSafeRegularFile(stagingStatePath, {
+        maxBytes: 16 * 1024,
+        label: 'JRE-Stagingstatus',
+      })
+      const state = JSON.parse(stateContents.toString('utf8')) as {
         version?: unknown
         indexDigest?: unknown
         createdAt?: unknown

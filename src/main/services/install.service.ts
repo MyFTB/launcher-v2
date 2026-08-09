@@ -26,7 +26,12 @@ import { getMainWindow } from '../app-state'
 import { packOperationService, PackOperationConflictError } from './pack-operation.service'
 import { ensureRuntime, resolveJavaPath } from './java.service'
 import { logger } from '../logger'
-import { assertContainedNoLinks, assertSafeDownloadDestination } from '../filesystem-safety'
+import {
+  assertContainedNoLinks,
+  assertSafeDownloadDestination,
+  openSafeRegularFile,
+  readSafeRegularFile,
+} from '../filesystem-safety'
 import type {
   ModpackManifest,
   ModpackManifestReference,
@@ -175,9 +180,11 @@ async function readSelectedFeatures(
 ): Promise<string[]> {
   const filePath = path.join(instanceDir, SELECTED_FEATURES_FILE)
   try {
-    const stat = await fs.lstat(filePath)
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 64 * 1024) throw new Error('Invalid feature selection file')
-    const parsed = JSON.parse(await fs.readFile(filePath, 'utf8')) as unknown
+    const contents = await readSafeRegularFile(filePath, {
+      maxBytes: 64 * 1024,
+      label: 'Feature-Auswahl',
+    })
+    const parsed = JSON.parse(contents.toString('utf8')) as unknown
     if (
       !Array.isArray(parsed)
       || parsed.length > 200
@@ -382,10 +389,8 @@ interface StagedTask {
 
 async function fileMatchesHash(filePath: string, expected: string): Promise<boolean> {
   try {
-    const stat = await fs.lstat(filePath)
-    if (!stat.isFile() || stat.isSymbolicLink()) return false
     const hash = crypto.createHash(detectHashAlgorithm(normalizeHash(expected)))
-    const handle = await fs.open(filePath, 'r')
+    const handle = await openSafeRegularFile(filePath, { label: 'Prüfsummendatei' })
     try {
       for await (const chunk of handle.createReadStream()) hash.update(chunk as Buffer)
     } finally {
@@ -524,11 +529,7 @@ async function stageTasks(
 
 async function readOptional(filePath: string, maxBytes: number, label: string): Promise<Buffer | null> {
   try {
-    const stat = await fs.lstat(filePath)
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > maxBytes) {
-      throw new ValidationError(`${label} ist keine sichere reguläre Datei.`)
-    }
-    return await fs.readFile(filePath)
+    return await readSafeRegularFile(filePath, { maxBytes, label })
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
     throw error
@@ -571,9 +572,11 @@ function bufferDigest(contents: Buffer | null): string | null {
 
 async function fileDigestOrNull(filePath: string): Promise<string | null> {
   try {
-    const stat = await fs.lstat(filePath)
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 50 * 1024 * 1024) return null
-    return crypto.createHash('sha256').update(await fs.readFile(filePath)).digest('hex')
+    const contents = await readSafeRegularFile(filePath, {
+      maxBytes: 50 * 1024 * 1024,
+      label: 'Prüfsummendatei',
+    })
+    return crypto.createHash('sha256').update(contents).digest('hex')
   } catch {
     return null
   }
@@ -690,26 +693,25 @@ async function beginInstallTransaction(
 async function readTransactionBackup(stagingDir: string, name: string): Promise<Buffer> {
   const backupPath = path.join(stagingDir, name)
   await assertContainedNoLinks(stagingDir, backupPath, { includeLeaf: true, label: 'Transaktionssicherung' })
-  const stat = await fs.lstat(backupPath)
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_TRANSACTION_BACKUP_BYTES) {
-    throw new ValidationError('Eine Transaktionssicherung ist nicht sicher.')
-  }
-  return fs.readFile(backupPath)
+  return readSafeRegularFile(backupPath, {
+    maxBytes: MAX_TRANSACTION_BACKUP_BYTES,
+    label: 'Transaktionssicherung',
+  })
 }
 
 async function recoverStagingTransaction(instanceDir: string, stagingDir: string): Promise<void> {
   const journalPath = path.join(stagingDir, TRANSACTION_FILE)
-  let journalStat: Awaited<ReturnType<typeof fs.lstat>>
+  let journalContents: Buffer
   try {
-    journalStat = await fs.lstat(journalPath)
+    journalContents = await readSafeRegularFile(journalPath, {
+      maxBytes: MAX_TRANSACTION_JOURNAL_BYTES,
+      label: 'Installationsprotokoll',
+    })
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
     throw error
   }
-  if (!journalStat.isFile() || journalStat.isSymbolicLink() || journalStat.size > MAX_TRANSACTION_JOURNAL_BYTES) {
-    throw new ValidationError('Das unterbrochene Installationsprotokoll ist nicht sicher.')
-  }
-  const journal = parseInstallTransaction(JSON.parse(await fs.readFile(journalPath, 'utf8')) as unknown)
+  const journal = parseInstallTransaction(JSON.parse(journalContents.toString('utf8')) as unknown)
   const markerPath = path.join(instanceDir, journal.marker)
   const currentMarkerHash = await fileDigestOrNull(markerPath)
   const currentAuxiliaryHash = journal.kind === 'managed'
@@ -1409,11 +1411,11 @@ class InstallService {
     const manifestPath = path.join(instanceDir, 'manifest.json')
     let oldManifest: ModpackManifest | null = null
     try {
-      const stat = await fs.lstat(manifestPath)
-      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 50 * 1024 * 1024) {
-        throw new ValidationError('Das alte Manifest ist kein sicheres Dateiziel.')
-      }
-      oldManifest = validateModpackManifest(JSON.parse(await fs.readFile(manifestPath, 'utf8')) as unknown)
+      const contents = await readSafeRegularFile(manifestPath, {
+        maxBytes: 50 * 1024 * 1024,
+        label: 'Altes Manifest',
+      })
+      oldManifest = validateModpackManifest(JSON.parse(contents.toString('utf8')) as unknown)
     } catch {
       // Missing/invalid manifests are never used as a cleanup authority.
     }
@@ -1790,11 +1792,11 @@ class InstallService {
           if (stat.isSymbolicLink() || !stat.isDirectory()) return
           await recoverInterruptedTransactions(instanceDir)
           const manifestPath = path.join(instanceDir, 'manifest.json')
-          const manifestStat = await fs.lstat(manifestPath)
-          if (!manifestStat.isFile() || manifestStat.isSymbolicLink() || manifestStat.size > 50 * 1024 * 1024) return
-          const parsed = validateModpackManifest(
-            JSON.parse(await fs.readFile(manifestPath, 'utf8')) as unknown,
-          )
+          const contents = await readSafeRegularFile(manifestPath, {
+            maxBytes: 50 * 1024 * 1024,
+            label: 'Modpack-Manifest',
+          })
+          const parsed = validateModpackManifest(JSON.parse(contents.toString('utf8')) as unknown)
           if (parsed.name === packName) manifests.push(parsed)
         })
       } catch {
@@ -1818,11 +1820,11 @@ class InstallService {
         if (stat.isSymbolicLink() || !stat.isDirectory()) return null
         await recoverInterruptedTransactions(instanceDir)
         const manifestPath = path.join(instanceDir, 'manifest.json')
-        const manifestStat = await fs.lstat(manifestPath)
-        if (!manifestStat.isFile() || manifestStat.isSymbolicLink() || manifestStat.size > 50 * 1024 * 1024) return null
-        const manifest = validateModpackManifest(
-          JSON.parse(await fs.readFile(manifestPath, 'utf8')) as unknown,
-        )
+        const contents = await readSafeRegularFile(manifestPath, {
+          maxBytes: 50 * 1024 * 1024,
+          label: 'Modpack-Manifest',
+        })
+        const manifest = validateModpackManifest(JSON.parse(contents.toString('utf8')) as unknown)
         return manifest.name === packName ? manifest : null
       }, owner)
     } catch {

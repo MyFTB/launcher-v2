@@ -5,6 +5,7 @@ import { app, safeStorage } from 'electron'
 import type { LegacyCredential } from '../../shared/validation'
 import { atomicWriteFile } from './config.service'
 import { logger } from '../logger'
+import { readSafeRegularFile } from '../filesystem-safety'
 
 export interface AuthCredential {
   minecraftAccessToken: string
@@ -66,11 +67,10 @@ class CredentialService {
 
     if (this.persistent) {
       try {
-        const stat = await fs.lstat(this.filePath)
-        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 5 * 1024 * 1024) {
-          throw new Error('Credential store is not a safe regular file')
-        }
-        const encrypted = await fs.readFile(this.filePath)
+        const encrypted = await readSafeRegularFile(this.filePath, {
+          maxBytes: 5 * 1024 * 1024,
+          label: 'Anmeldedatenspeicher',
+        })
         const decrypted = safeStorage.decryptString(encrypted)
         const parsed = JSON.parse(decrypted) as CredentialFile
         if (parsed.version !== 1 || typeof parsed.profiles !== 'object' || parsed.profiles === null) {

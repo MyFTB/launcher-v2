@@ -18,7 +18,7 @@ import {
   type LegacyCredential,
 } from '../../shared/validation'
 import { logger } from '../logger'
-import { assertContainedNoLinks } from '../filesystem-safety'
+import { assertContainedNoLinks, readSafeRegularFile } from '../filesystem-safety'
 import { writeDataDirPointer } from '../bootstrap'
 import {
   validateMigrationTarget,
@@ -224,11 +224,10 @@ class ConfigService {
   }
 
   private async readValidated(filePath: string): Promise<LauncherConfig> {
-    const stat = await fs.lstat(filePath)
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 5 * 1024 * 1024) {
-      throw new Error('Configuration file is not a safe regular file')
-    }
-    const raw = await fs.readFile(filePath, 'utf8')
+    const raw = (await readSafeRegularFile(filePath, {
+      maxBytes: 5 * 1024 * 1024,
+      label: 'Konfigurationsdatei',
+    })).toString('utf8')
     const parsed = parseLauncherConfig(JSON.parse(raw) as unknown, this.defaults())
     this.legacyCredentials.push(...parsed.legacyCredentials)
     return parsed.config
