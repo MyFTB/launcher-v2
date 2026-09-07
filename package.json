@@ -32,7 +32,7 @@
     "@xmcl/core": "^2.16.0",
     "@xmcl/installer": "^6.3.1",
     "electron-updater": "^6.8.9",
-    "undici": "^8.10.0",
+    "undici": "^8.10.1",
     "undici-xmcl": "npm:undici@^7.29.0"
   },
   "devDependencies": {
